@@ -2,7 +2,15 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 import { startWhatsApp, onMessage, sendMessage } from './whatsapp/connection.js';
-import { getOrCreateUser, saveMessage, getConversationHistory, updateUserName, logCrisis } from './db/supabase.js';
+import {
+  getOrCreateUser,
+  saveMessage,
+  getConversationHistory,
+  updateUserName,
+  logCrisis,
+  deleteUserData,
+  getAccountabilitySummary,
+} from './db/supabase.js';
 import { generateResponse } from './ai/claude.js';
 import { detectCrisis, needsImmediateEscalation } from './crisis/detector.js';
 import { startCheckInScheduler, scheduleFollowUp } from './checkins/scheduler.js';
@@ -20,11 +28,12 @@ console.log(`
  * Flow:
  * 1. Message comes in from WhatsApp
  * 2. Get or create user in Supabase
- * 3. Run crisis detection in parallel
- * 4. Fetch conversation history
- * 5. Call Claude with system prompt + history + new message
- * 6. Save both messages to Supabase
- * 7. Send response back via WhatsApp
+ * 3. Check for special commands (delete, etc.)
+ * 4. Run crisis detection in parallel
+ * 5. Fetch conversation history + accountability context
+ * 6. Call Claude with system prompt + history + goals context + new message
+ * 7. Save both messages to Supabase
+ * 8. Send response back via WhatsApp
  */
 async function handleIncomingMessage({ phoneNumber, phoneJid, text, pushName }) {
   console.log(`\n💬 [${phoneNumber}] ${pushName || 'Unknown'}: "${text.substring(0, 80)}${text.length > 80 ? '...' : ''}"`);
@@ -39,7 +48,15 @@ async function handleIncomingMessage({ phoneNumber, phoneJid, text, pushName }) 
       user.display_name = pushName;
     }
 
-    // Step 2: Crisis detection (runs in parallel with history fetch)
+    // Step 2: Handle deletion requests
+    if (isDeleteRequest(text)) {
+      await deleteUserData(phoneNumber);
+      await sendMessage(phoneJid, "Done. Everything's gone. If you ever want to talk again, just text me. No history, fresh start. Take care of yourself. 💛");
+      console.log(`🗑️  All data deleted for ${phoneNumber}`);
+      return;
+    }
+
+    // Step 3: Crisis detection (runs in parallel with other fetches)
     const crisisResult = detectCrisis(text);
 
     if (crisisResult.isCrisis) {
@@ -50,10 +67,27 @@ async function handleIncomingMessage({ phoneNumber, phoneJid, text, pushName }) 
       await scheduleFollowUp(phoneNumber, user.id, `Crisis detected (${crisisResult.severity}) — follow up`, 12);
     }
 
-    // Step 3: Fetch conversation history
-    const history = await getConversationHistory(phoneNumber, 50);
+    // Step 4: Fetch conversation history + accountability summary in parallel
+    const [history, accountabilitySummary] = await Promise.all([
+      getConversationHistory(phoneNumber, 50),
+      getAccountabilitySummary(phoneNumber),
+    ]);
 
-    // Step 4: Build messages array for Claude
+    // Step 5: Build enriched user context (merge stored context + accountability data)
+    const enrichedContext = {
+      ...(user.context || {}),
+    };
+
+    // Add accountability context if they have active goals
+    if (accountabilitySummary.totalActiveGoals > 0) {
+      enrichedContext._accountability = {
+        activeGoals: accountabilitySummary.activeGoals,
+        recentWins: accountabilitySummary.recentWins,
+        totalActiveGoals: accountabilitySummary.totalActiveGoals,
+      };
+    }
+
+    // Step 6: Build messages array for Claude
     const messages = history.map((msg) => ({
       role: msg.role,
       content: msg.content,
@@ -62,14 +96,14 @@ async function handleIncomingMessage({ phoneNumber, phoneJid, text, pushName }) 
     // Add the new message
     messages.push({ role: 'user', content: text });
 
-    // Step 5: Generate response from Claude
-    const response = await generateResponse(messages, user.context || {}, user.display_name);
+    // Step 7: Generate response from Claude (with full context including goals)
+    const response = await generateResponse(messages, enrichedContext, user.display_name);
 
-    // Step 6: Save both messages to Supabase
+    // Step 8: Save both messages to Supabase
     await saveMessage(phoneNumber, user.id, 'user', text);
     await saveMessage(phoneNumber, user.id, 'assistant', response);
 
-    // Step 7: Send response back via WhatsApp
+    // Step 9: Send response back via WhatsApp
     await sendMessage(phoneJid, response);
 
     console.log(`✅ [${phoneNumber}] Bubba: "${response.substring(0, 80)}${response.length > 80 ? '...' : ''}"`);
@@ -91,13 +125,16 @@ async function handleIncomingMessage({ phoneNumber, phoneJid, text, pushName }) 
   }
 }
 
-// Handle deletion requests
+/**
+ * Check if the message is a data deletion request
+ */
 function isDeleteRequest(text) {
   const deletePatterns = [
     /delete (everything|all|my data)/i,
     /forget (about )?me/i,
     /remove my (data|info|information)/i,
     /i want everything.*deleted/i,
+    /wipe my (data|info|history)/i,
   ];
   return deletePatterns.some((p) => p.test(text));
 }
@@ -111,7 +148,7 @@ async function main() {
     // Start WhatsApp connection
     await startWhatsApp();
 
-    // Start check-in scheduler
+    // Start check-in scheduler (general + accountability)
     startCheckInScheduler();
 
   } catch (error) {
