@@ -442,6 +442,316 @@ export async function getAccountabilitySummary(phoneNumber) {
 }
 
 // ═══════════════════════════════════════════
+// OPPORTUNITY MONITOR
+// ═══════════════════════════════════════════
+
+/**
+ * Add a new opportunity to the database
+ */
+export async function addOpportunity({ title, description, category, subcategory, tags, source, url, deadline, location, eligibility }) {
+  const { data, error } = await supabase
+    .from('opportunities')
+    .insert({
+      title,
+      description: description || null,
+      category,
+      subcategory: subcategory || null,
+      tags: tags || [],
+      source: source || null,
+      url: url || null,
+      deadline: deadline || null,
+      location: location || null,
+      eligibility: eligibility || null,
+    })
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
+/**
+ * Get all active opportunities (optionally filtered by category)
+ */
+export async function getActiveOpportunities(category = null) {
+  let query = supabase
+    .from('opportunities')
+    .select('*')
+    .eq('is_active', true)
+    .order('created_at', { ascending: false });
+
+  if (category) {
+    query = query.eq('category', category);
+  }
+
+  // Exclude expired opportunities
+  const now = new Date().toISOString();
+  query = query.or(`deadline.is.null,deadline.gte.${now}`);
+
+  const { data, error } = await query;
+  if (error) throw error;
+  return data || [];
+}
+
+/**
+ * Get opportunities that haven't been sent to a specific user yet
+ */
+export async function getUnmatchedOpportunitiesForUser(userId) {
+  // Get IDs of opportunities already matched to this user
+  const { data: existingMatches } = await supabase
+    .from('opportunity_matches')
+    .select('opportunity_id')
+    .eq('user_id', userId);
+
+  const matchedIds = (existingMatches || []).map((m) => m.opportunity_id);
+
+  // Get active opportunities not yet matched
+  let query = supabase
+    .from('opportunities')
+    .select('*')
+    .eq('is_active', true)
+    .order('created_at', { ascending: false });
+
+  if (matchedIds.length > 0) {
+    query = query.not('id', 'in', `(${matchedIds.join(',')})`);
+  }
+
+  // Exclude expired
+  const now = new Date().toISOString();
+  query = query.or(`deadline.is.null,deadline.gte.${now}`);
+
+  const { data, error } = await query;
+  if (error) throw error;
+  return data || [];
+}
+
+/**
+ * Get user interests for matching
+ */
+export async function getUserInterests(userId) {
+  const { data, error } = await supabase
+    .from('user_interests')
+    .select('*')
+    .eq('user_id', userId)
+    .order('strength', { ascending: false });
+
+  if (error) throw error;
+  return data || [];
+}
+
+/**
+ * Add or update a user interest
+ */
+export async function upsertUserInterest(userId, phoneNumber, interest, strength = 'medium', source = 'inferred') {
+  // Check if interest already exists
+  const { data: existing } = await supabase
+    .from('user_interests')
+    .select('id, strength')
+    .eq('user_id', userId)
+    .eq('interest', interest)
+    .single();
+
+  if (existing) {
+    // Only upgrade strength, never downgrade
+    const levels = { low: 1, medium: 2, high: 3 };
+    if (levels[strength] > levels[existing.strength]) {
+      await supabase
+        .from('user_interests')
+        .update({ strength, source })
+        .eq('id', existing.id);
+    }
+    return;
+  }
+
+  const { error } = await supabase
+    .from('user_interests')
+    .insert({
+      user_id: userId,
+      phone_number: phoneNumber,
+      interest,
+      strength,
+      source,
+    });
+
+  if (error) throw error;
+}
+
+/**
+ * Create an opportunity match (schedule sending to a user)
+ */
+export async function createOpportunityMatch(userId, phoneNumber, opportunityId, matchReason) {
+  const { data, error } = await supabase
+    .from('opportunity_matches')
+    .insert({
+      user_id: userId,
+      phone_number: phoneNumber,
+      opportunity_id: opportunityId,
+      match_reason: matchReason,
+    })
+    .select()
+    .single();
+
+  if (error) throw error;
+  return data;
+}
+
+/**
+ * Get pending opportunity matches (ready to send)
+ */
+export async function getPendingOpportunityMatches() {
+  const { data, error } = await supabase
+    .from('opportunity_matches')
+    .select('*, opportunities(*), users(display_name, context)')
+    .eq('sent', false)
+    .order('created_at', { ascending: true });
+
+  if (error) throw error;
+  return data || [];
+}
+
+/**
+ * Mark an opportunity match as sent
+ */
+export async function markOpportunityMatchSent(matchId) {
+  const { error } = await supabase
+    .from('opportunity_matches')
+    .update({ sent: true, sent_at: new Date().toISOString() })
+    .eq('id', matchId);
+
+  if (error) throw error;
+}
+
+/**
+ * Update user's response to an opportunity
+ */
+export async function updateOpportunityResponse(matchId, response, responseNote = null) {
+  const { error } = await supabase
+    .from('opportunity_matches')
+    .update({ response, response_note: responseNote })
+    .eq('id', matchId);
+
+  if (error) throw error;
+}
+
+/**
+ * Get opportunities sent to a user that need follow-up
+ * (sent but no response, and sent more than N hours ago)
+ */
+export async function getOpportunitiesNeedingFollowUp(hoursAgo = 48) {
+  const cutoff = new Date();
+  cutoff.setHours(cutoff.getHours() - hoursAgo);
+
+  const { data, error } = await supabase
+    .from('opportunity_matches')
+    .select('*, opportunities(*), users(display_name, context)')
+    .eq('sent', true)
+    .eq('followed_up', false)
+    .is('response', null)
+    .lt('sent_at', cutoff.toISOString());
+
+  if (error) throw error;
+  return data || [];
+}
+
+/**
+ * Mark an opportunity match as followed up
+ */
+export async function markOpportunityFollowedUp(matchId) {
+  const { error } = await supabase
+    .from('opportunity_matches')
+    .update({ followed_up: true })
+    .eq('id', matchId);
+
+  if (error) throw error;
+}
+
+/**
+ * Get opportunities with approaching deadlines that were sent to users
+ * (deadline within N hours, user showed interest or hasn't responded)
+ */
+export async function getOpportunitiesWithApproachingDeadlines(hoursAhead = 48) {
+  const now = new Date();
+  const cutoff = new Date();
+  cutoff.setHours(cutoff.getHours() + hoursAhead);
+
+  const { data, error } = await supabase
+    .from('opportunity_matches')
+    .select('*, opportunities(*), users(display_name, context)')
+    .eq('sent', true)
+    .in('response', ['interested', null])
+    .not('opportunities.deadline', 'is', null)
+    .gte('opportunities.deadline', now.toISOString())
+    .lte('opportunities.deadline', cutoff.toISOString());
+
+  if (error) throw error;
+  return data || [];
+}
+
+/**
+ * Get all users with their interests (for batch matching)
+ */
+export async function getAllUsersWithInterests() {
+  const { data, error } = await supabase
+    .from('users')
+    .select('*, user_interests(*)')
+    .eq('is_active', true);
+
+  if (error) throw error;
+  return data || [];
+}
+
+/**
+ * Expire old opportunities (past deadline)
+ */
+export async function expireOldOpportunities() {
+  const now = new Date().toISOString();
+
+  const { error } = await supabase
+    .from('opportunities')
+    .update({ is_active: false, updated_at: now })
+    .eq('is_active', true)
+    .not('deadline', 'is', null)
+    .lt('deadline', now);
+
+  if (error) throw error;
+}
+
+/**
+ * Get opportunity summary for a user (for context in conversations)
+ */
+export async function getOpportunitySummary(phoneNumber) {
+  const { data: user } = await supabase
+    .from('users')
+    .select('id')
+    .eq('phone_number', phoneNumber)
+    .single();
+
+  if (!user) return { pendingOpportunities: [], interests: [] };
+
+  const [matches, interests] = await Promise.all([
+    supabase
+      .from('opportunity_matches')
+      .select('*, opportunities(title, category, deadline)')
+      .eq('user_id', user.id)
+      .eq('sent', true)
+      .in('response', ['interested', null])
+      .order('created_at', { ascending: false })
+      .limit(5),
+    getUserInterests(user.id),
+  ]);
+
+  return {
+    pendingOpportunities: (matches.data || []).map((m) => ({
+      title: m.opportunities?.title,
+      category: m.opportunities?.category,
+      deadline: m.opportunities?.deadline,
+      response: m.response,
+    })),
+    interests: interests.map((i) => i.interest),
+  };
+}
+
+// ═══════════════════════════════════════════
 // DATA DELETION
 // ═══════════════════════════════════════════
 
@@ -458,6 +768,8 @@ export async function deleteUserData(phoneNumber) {
   if (!user) return;
 
   // Delete in order (foreign keys)
+  await supabase.from('opportunity_matches').delete().eq('user_id', user.id);
+  await supabase.from('user_interests').delete().eq('user_id', user.id);
   await supabase.from('goal_checkins').delete().eq('user_id', user.id);
   await supabase.from('wins').delete().eq('user_id', user.id);
   await supabase.from('goals').delete().eq('user_id', user.id);

@@ -10,6 +10,7 @@ import {
   logCrisis,
   deleteUserData,
   getAccountabilitySummary,
+  getOpportunitySummary,
 } from './db/supabase.js';
 import { generateResponse } from './ai/deepseek.js';
 import { detectCrisis, needsImmediateEscalation } from './crisis/detector.js';
@@ -68,9 +69,10 @@ async function handleIncomingMessage({ phoneNumber, phoneJid, text, pushName }) 
     }
 
     // Step 4: Fetch conversation history + accountability summary in parallel
-    const [history, accountabilitySummary] = await Promise.all([
+    const [history, accountabilitySummary, opportunitySummary] = await Promise.all([
       getConversationHistory(phoneNumber, 50),
       getAccountabilitySummary(phoneNumber),
+      getOpportunitySummary(phoneNumber),
     ]);
 
     // Step 5: Build enriched user context (merge stored context + accountability data)
@@ -84,6 +86,14 @@ async function handleIncomingMessage({ phoneNumber, phoneJid, text, pushName }) 
         activeGoals: accountabilitySummary.activeGoals,
         recentWins: accountabilitySummary.recentWins,
         totalActiveGoals: accountabilitySummary.totalActiveGoals,
+      };
+    }
+
+    // Add opportunity context if they have pending opportunities or interests
+    if (opportunitySummary.pendingOpportunities.length > 0 || opportunitySummary.interests.length > 0) {
+      enrichedContext._opportunities = {
+        pendingOpportunities: opportunitySummary.pendingOpportunities,
+        interests: opportunitySummary.interests,
       };
     }
 

@@ -10,6 +10,7 @@ import {
 } from '../db/supabase.js';
 import { generateCheckInMessage, generateAccountabilityCheckIn } from '../ai/deepseek.js';
 import { sendMessage } from '../whatsapp/connection.js';
+import { runOpportunityCycle } from '../opportunities/monitor.js';
 
 // ═══════════════════════════════════════════
 // GENERAL CHECK-INS (existing)
@@ -270,6 +271,17 @@ export function startCheckInScheduler() {
     await silenceAccountabilityCheckIns();
   });
 
+  // Opportunity cycle (11am and 5pm daily — match, deliver, follow up, nudge)
+  cron.schedule('0 11 * * *', async () => {
+    console.log('🎯 Running opportunity cycle (morning)...');
+    await runOpportunityCycle();
+  });
+
+  cron.schedule('0 17 * * *', async () => {
+    console.log('🎯 Running opportunity cycle (evening)...');
+    await runOpportunityCycle();
+  });
+
   // Process any already-pending check-ins on startup
   setTimeout(async () => {
     await processPendingCheckIns();
@@ -281,6 +293,7 @@ export function startCheckInScheduler() {
   console.log(`   🌙 Evening accountability: 0 21 * * *`);
   console.log(`   ⏰ Deadline nudges: every 6h`);
   console.log(`   🤫 Silence nudges: 0 14 * * *`);
+  console.log(`   🎯 Opportunities: 0 11,17 * * *`);
 }
 
 /**
