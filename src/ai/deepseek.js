@@ -1,15 +1,16 @@
-import Anthropic from '@anthropic-ai/sdk';
+import OpenAI from 'openai';
 import dotenv from 'dotenv';
 import { BUBBA_SYSTEM_PROMPT } from '../prompts/system.js';
 
 dotenv.config();
 
-const anthropic = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY,
+const deepseek = new OpenAI({
+  baseURL: 'https://api.deepseek.com',
+  apiKey: process.env.DEEPSEEK_API_KEY,
 });
 
 /**
- * Generate Bubba's response using Claude
+ * Generate Bubba's response using DeepSeek
  * 
  * @param {Array} conversationHistory - Array of {role, content} messages
  * @param {object} userContext - Learned info about the user (from Supabase)
@@ -30,23 +31,26 @@ export async function generateResponse(conversationHistory, userContext = {}, us
 
   const systemPrompt = BUBBA_SYSTEM_PROMPT + contextBlock;
 
-  // Format messages for Claude API
-  const messages = conversationHistory.map((msg) => ({
-    role: msg.role,
-    content: msg.content,
-  }));
+  // Format messages for DeepSeek (OpenAI-compatible format)
+  const messages = [
+    { role: 'system', content: systemPrompt },
+    ...conversationHistory.map((msg) => ({
+      role: msg.role,
+      content: msg.content,
+    })),
+  ];
 
   try {
-    const response = await anthropic.messages.create({
-      model: 'claude-sonnet-4-20250514',
+    const response = await deepseek.chat.completions.create({
+      model: process.env.DEEPSEEK_MODEL || 'deepseek-chat',
       max_tokens: 1024,
-      system: systemPrompt,
       messages,
+      temperature: 0.9,
     });
 
-    return response.content[0].text;
+    return response.choices[0].message.content;
   } catch (error) {
-    console.error('❌ Claude API error:', error.message);
+    console.error('❌ DeepSeek API error:', error.message);
 
     // Fallback response if API fails
     return "I'm having a moment — something's off on my end. Give me a sec and text me again? I'm not going anywhere.";
@@ -76,16 +80,19 @@ export async function generateCheckInMessage(userContext = {}, userName = null, 
 You are proactively checking in on this person. Write a short, natural check-in message. Not clinical. Not "I'm checking in on your progress." Just a real friend who noticed they haven't heard from someone in a while. Keep it to 1-2 short messages max.`;
 
   try {
-    const response = await anthropic.messages.create({
-      model: 'claude-sonnet-4-20250514',
+    const response = await deepseek.chat.completions.create({
+      model: process.env.DEEPSEEK_MODEL || 'deepseek-chat',
       max_tokens: 256,
-      system: systemPrompt,
-      messages: [{ role: 'user', content: '[SYSTEM: Generate a proactive check-in message]' }],
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: '[SYSTEM: Generate a proactive check-in message]' },
+      ],
+      temperature: 0.9,
     });
 
-    return response.content[0].text;
+    return response.choices[0].message.content;
   } catch (error) {
-    console.error('❌ Claude API error on check-in:', error.message);
+    console.error('❌ DeepSeek API error on check-in:', error.message);
     return "Hey, haven't heard from you in a bit. You good?";
   }
 }
@@ -151,16 +158,19 @@ Examples of your tone:
   const systemPrompt = BUBBA_SYSTEM_PROMPT + contextBlock + `\n\n` + typeInstructions[type];
 
   try {
-    const response = await anthropic.messages.create({
-      model: 'claude-sonnet-4-20250514',
+    const response = await deepseek.chat.completions.create({
+      model: process.env.DEEPSEEK_MODEL || 'deepseek-chat',
       max_tokens: 256,
-      system: systemPrompt,
-      messages: [{ role: 'user', content: `[SYSTEM: Generate a ${type} accountability check-in message]` }],
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: `[SYSTEM: Generate a ${type} accountability check-in message]` },
+      ],
+      temperature: 0.9,
     });
 
-    return response.content[0].text;
+    return response.choices[0].message.content;
   } catch (error) {
-    console.error(`❌ Claude API error on ${type} accountability check-in:`, error.message);
+    console.error(`❌ DeepSeek API error on ${type} accountability check-in:`, error.message);
 
     // Fallback messages per type
     const fallbacks = {

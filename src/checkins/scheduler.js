@@ -8,7 +8,7 @@ import {
   getUsersWithRecurringGoals,
   getActiveGoals,
 } from '../db/supabase.js';
-import { generateCheckInMessage, generateAccountabilityCheckIn } from '../ai/claude.js';
+import { generateCheckInMessage, generateAccountabilityCheckIn } from '../ai/deepseek.js';
 import { sendMessage } from '../whatsapp/connection.js';
 
 // ═══════════════════════════════════════════

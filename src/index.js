@@ -11,7 +11,7 @@ import {
   deleteUserData,
   getAccountabilitySummary,
 } from './db/supabase.js';
-import { generateResponse } from './ai/claude.js';
+import { generateResponse } from './ai/deepseek.js';
 import { detectCrisis, needsImmediateEscalation } from './crisis/detector.js';
 import { startCheckInScheduler, scheduleFollowUp } from './checkins/scheduler.js';
 
