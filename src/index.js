@@ -31,7 +31,7 @@ console.log(`
  * 3. Check for special commands (delete, etc.)
  * 4. Run crisis detection in parallel
  * 5. Fetch conversation history + accountability context
- * 6. Call Claude with system prompt + history + goals context + new message
+ * 6. Call DeepSeek with system prompt + history + goals context + new message
  * 7. Save both messages to Supabase
  * 8. Send response back via WhatsApp
  */
@@ -87,7 +87,7 @@ async function handleIncomingMessage({ phoneNumber, phoneJid, text, pushName }) 
       };
     }
 
-    // Step 6: Build messages array for Claude
+    // Step 6: Build messages array for DeepSeek
     const messages = history.map((msg) => ({
       role: msg.role,
       content: msg.content,
@@ -96,7 +96,7 @@ async function handleIncomingMessage({ phoneNumber, phoneJid, text, pushName }) 
     // Add the new message
     messages.push({ role: 'user', content: text });
 
-    // Step 7: Generate response from Claude (with full context including goals)
+    // Step 7: Generate response from DeepSeek (with full context including goals)
     const response = await generateResponse(messages, enrichedContext, user.display_name);
 
     // Step 8: Save both messages to Supabase

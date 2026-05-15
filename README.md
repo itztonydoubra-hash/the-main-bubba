@@ -4,7 +4,7 @@
 
 Bubba is a WhatsApp companion for NDU Law Faculty students. Not a therapist. Not a chatbot. A real presence you can text when everything is falling apart.
 
-Built with [Baileys](https://github.com/WhiskeySockets/Baileys) + [Supabase](https://supabase.com) + [Claude](https://anthropic.com).
+Built with [Baileys](https://github.com/WhiskeySockets/Baileys) + [Supabase](https://supabase.com) + [DeepSeek](https://deepseek.com).
 
 ---
 
@@ -14,7 +14,7 @@ Built with [Baileys](https://github.com/WhiskeySockets/Baileys) + [Supabase](htt
 
 - Node.js 18+
 - A Supabase project (free tier works)
-- An Anthropic API key
+- A DeepSeek API key
 - A phone number dedicated to Bubba (separate from your personal number)
 
 ### 2. Setup
@@ -54,9 +54,9 @@ WhatsApp (Baileys)
     ↓ incoming message
 Main Orchestrator (src/index.js)
     ├── Crisis Detector (pattern matching)
-    ├── Supabase (conversation history + user memory)
-    ├── Claude API (generates Bubba's response)
-    └── Check-in Scheduler (proactive follow-ups)
+    ├── Supabase (conversation history + user memory + goals)
+    ├── DeepSeek API (generates Bubba's response)
+    └── Check-in Scheduler (proactive follow-ups + accountability)
     ↓ response
 WhatsApp (Baileys)
 ```
@@ -67,9 +67,9 @@ WhatsApp (Baileys)
 src/
 ├── index.js              # Main orchestrator
 ├── ai/
-│   └── claude.js         # Anthropic/Claude integration
+│   └── deepseek.js       # DeepSeek integration (OpenAI-compatible)
 ├── checkins/
-│   └── scheduler.js      # Proactive check-in system
+│   └── scheduler.js      # Proactive check-in + accountability system
 ├── crisis/
 │   └── detector.js       # Crisis pattern detection
 ├── db/
@@ -87,16 +87,19 @@ src/
 |----------|-------------|
 | `SUPABASE_URL` | Your Supabase project URL |
 | `SUPABASE_SERVICE_KEY` | Service role key (full access) |
-| `ANTHROPIC_API_KEY` | Anthropic API key for Claude |
+| `DEEPSEEK_API_KEY` | DeepSeek API key |
+| `DEEPSEEK_MODEL` | Model name (default: `deepseek-chat`) |
 | `CHECK_IN_ENABLED` | `true` to enable proactive check-ins |
 | `CHECK_IN_CRON` | Cron expression for check-in schedule (default: `0 10 * * *`) |
 
 ## Key Features
 
-- **Real conversation** — Claude Sonnet with a deeply detailed system prompt that makes Bubba feel like a real person
+- **Real conversation** — DeepSeek with a deeply detailed system prompt that makes Bubba feel like a real person
 - **Memory** — Supabase stores conversation history so Bubba remembers you
 - **Crisis detection** — Pattern matching in English and Nigerian Pidgin catches danger signals
 - **Proactive check-ins** — Bubba notices when you go quiet and reaches out
+- **Accountability partner** — Tracks goals, celebrates wins, nudges without guilt
+- **Humor & sass** — Nigerian humor, affectionate teasing, running jokes
 - **Privacy** — All data tied to phone number, deletable on request
 - **Right to forget** — Text "delete everything" and all your data is wiped
 
@@ -105,6 +108,7 @@ src/
 - Bubba uses a **service role key** for Supabase (not the anon key) because the bot itself manages all user data server-side
 - The `auth_info/` folder stores WhatsApp session credentials — keep it secure and never commit it
 - Crisis detection runs alongside normal responses — it doesn't block conversation, it adds awareness
+- DeepSeek uses an OpenAI-compatible API, so we use the `openai` npm package pointed at `https://api.deepseek.com`
 
 ---
 
