@@ -1,0 +1,30 @@
+{
+  "name": "bubba-whatsapp-bot",
+  "version": "1.0.0",
+  "description": "Bubba — a WhatsApp companion for NDU law students. Built with Baileys + Supabase + DeepSeek.",
+  "main": "src/index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "keywords": [
+    "whatsapp",
+    "bot",
+    "baileys",
+    "supabase",
+    "deepseek",
+    "mental-health"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@supabase/supabase-js": "^2.105.4",
+    "@whiskeysockets/baileys": "^6.7.16",
+    "dotenv": "^16.6.1",
+    "node-cron": "^3.0.3",
+    "openai": "^4.77.0",
+    "pino": "^9.6.0",
+    "qrcode-terminal": "^0.12.0"
+  }
+}
