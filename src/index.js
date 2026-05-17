@@ -1,19 +1,26 @@
 import dotenv from 'dotenv'
 dotenv.config()
 
-import { createClient } from '@supabase/supabase-js'
+import { startWhatsApp, onMessage, sendMessage } from './whatsapp/connection.js'
+import { generateResponse } from './ai/deepseek.js'
 
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_ANON_KEY
-)
+console.log('Starting Bubba...')
 
-const { data, error } = await supabase
-  .from('crisis_logs')
-  .select('*')
+onMessage(async ({ phoneNumber, phoneJid, text, pushName }) => {
+  console.log(`Message from ${phoneNumber}: ${text}`)
+  
+  try {
+    const response = await generateResponse(
+      [{ role: 'user', content: text }],
+      {},
+      pushName
+    )
+    await sendMessage(phoneJid, response)
+    console.log(`Bubba replied to ${phoneNumber}`)
+  } catch (err) {
+    console.error('Error processing message:', err)
+    await sendMessage(phoneJid, "Hey, I'm having a moment. Give me a second and try again?")
+  }
+})
 
-if (error) {
-  console.log('❌ Connection failed:', error.message)
-} else {
-  console.log('✅ Connected! Data:', data)
-}
+startWhatsApp().catch(console.error)
