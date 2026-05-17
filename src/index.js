@@ -24,3 +24,6 @@ onMessage(async ({ phoneNumber, phoneJid, text, pushName }) => {
 })
 
 startWhatsApp().catch(console.error)
+setInterval(() => {
+  console.log("Bubba is alive...");
+}, 10000);
