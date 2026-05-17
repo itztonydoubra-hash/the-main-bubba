@@ -35,7 +35,9 @@ export async function sendMessage(jid, text) {
  * Start the WhatsApp connection using Baileys
  */
 export async function startWhatsApp() {
+  console.log('   Loading auth state...');
   const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
+  console.log('   Auth state loaded. Creating socket...');
 
   sock = makeWASocket({
     auth: {
@@ -46,6 +48,8 @@ export async function startWhatsApp() {
     logger,
     browser: ['Bubba', 'Chrome', '1.0.0'],
   });
+
+  console.log('   Socket created. Waiting for connection...');
 
   // Handle connection updates
   sock.ev.on('connection.update', (update) => {

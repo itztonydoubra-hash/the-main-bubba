@@ -1,6 +1,17 @@
 import dotenv from 'dotenv';
 dotenv.config();
 
+// ═══════════════════════════════════════════
+// GLOBAL ERROR HANDLERS (catch silent crashes)
+// ═══════════════════════════════════════════
+process.on('uncaughtException', (err) => {
+  console.error('💀 UNCAUGHT EXCEPTION:', err);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('💀 UNHANDLED REJECTION:', reason);
+});
+
 import http from 'http';
 import { startWhatsApp, onMessage, sendMessage } from './whatsapp/connection.js';
 import {
@@ -170,10 +181,19 @@ function isDeleteRequest(text) {
 // Start everything
 async function main() {
   try {
+    console.log('🔧 Starting Bubba...');
+    console.log(`   Node version: ${process.version}`);
+    console.log(`   Platform: ${process.platform}`);
+    console.log(`   Supabase URL: ${process.env.SUPABASE_URL ? '✅ set' : '❌ MISSING'}`);
+    console.log(`   Supabase Key: ${process.env.SUPABASE_SERVICE_KEY ? '✅ set' : '❌ MISSING'}`);
+    console.log(`   DeepSeek Key: ${process.env.DEEPSEEK_API_KEY ? '✅ set' : '❌ MISSING'}`);
+    console.log('');
+
     // Register message handler
     onMessage(handleIncomingMessage);
 
     // Start WhatsApp connection
+    console.log('📱 Connecting to WhatsApp...');
     await startWhatsApp();
 
     // Start check-in scheduler (general + accountability)
@@ -181,7 +201,8 @@ async function main() {
 
   } catch (error) {
     console.error('❌ Fatal error starting Bubba:', error);
-    process.exit(1);
+    console.error('Stack:', error.stack);
+    // Don't exit — keep health check alive so you can see logs on Render
   }
 }
 
