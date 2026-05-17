@@ -1,6 +1,7 @@
 import dotenv from 'dotenv';
 dotenv.config();
 
+import http from 'http';
 import { startWhatsApp, onMessage, sendMessage } from './whatsapp/connection.js';
 import {
   getOrCreateUser,
@@ -15,6 +16,23 @@ import {
 import { generateResponse } from './ai/deepseek.js';
 import { detectCrisis, needsImmediateEscalation } from './crisis/detector.js';
 import { startCheckInScheduler, scheduleFollowUp } from './checkins/scheduler.js';
+
+// ═══════════════════════════════════════════
+// HEALTH CHECK SERVER (keeps Render alive)
+// ═══════════════════════════════════════════
+const PORT = process.env.PORT || 3000;
+const healthServer = http.createServer((req, res) => {
+  if (req.url === '/health' || req.url === '/') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ status: 'ok', service: 'bubba', uptime: process.uptime() }));
+  } else {
+    res.writeHead(404);
+    res.end('Not found');
+  }
+});
+healthServer.listen(PORT, () => {
+  console.log(`🌐 Health check server running on port ${PORT}`);
+});
 
 console.log(`
 ╔══════════════════════════════════════╗
