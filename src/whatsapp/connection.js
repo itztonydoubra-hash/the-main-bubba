@@ -169,19 +169,75 @@ export async function startWhatsApp() {
       if (msg.key.fromMe) continue;
       if (msg.key.remoteJid === 'status@broadcast') continue;
 
-      const text = msg.message?.conversation
+      const remoteJid = msg.key.remoteJid;
+      const isGroup = remoteJid.endsWith('@g.us');
+      const pushName = msg.pushName || null;
+
+      // Get text content from various message types
+      let text = msg.message?.conversation
         || msg.message?.extendedTextMessage?.text
         || null;
 
+      // Check for voice/audio messages
+      const audioMessage = msg.message?.audioMessage;
+      const isVoiceNote = audioMessage && (audioMessage.ptt === true || audioMessage.mimetype?.includes('audio'));
+
+      // For group messages: only respond if Bubba is mentioned/tagged
+      if (isGroup) {
+        const mentionedJids = msg.message?.extendedTextMessage?.contextInfo?.mentionedJid || [];
+        const quotedParticipant = msg.message?.extendedTextMessage?.contextInfo?.participant;
+        const isMentioned = mentionedJids.some(jid => jid === sock.user?.id || jid === sock.user?.lid);
+        const isQuotedReply = quotedParticipant === sock.user?.id || quotedParticipant === sock.user?.lid;
+        const textLower = (text || '').toLowerCase();
+        const isNameMentioned = textLower.includes('bubba') || textLower.includes('@bubba');
+
+        // Only respond in groups if mentioned, quoted, or name is said
+        if (!isMentioned && !isQuotedReply && !isNameMentioned && !isVoiceNote) {
+          continue;
+        }
+
+        // Strip the @mention from the text for cleaner processing
+        if (text) {
+          text = text.replace(/@\d+/g, '').trim();
+        }
+      }
+
+      // Handle voice notes
+      if (isVoiceNote && !text) {
+        if (messageHandler) {
+          try {
+            // Get sender info
+            const senderJid = isGroup ? (msg.key.participant || remoteJid) : remoteJid;
+            const phoneNumber = senderJid.replace('@s.whatsapp.net', '').replace('@lid', '');
+            const replyJid = remoteJid; // Reply to same chat (group or DM)
+
+            await messageHandler({
+              phoneNumber,
+              phoneJid: replyJid,
+              text: null,
+              pushName,
+              isGroup,
+              isVoiceNote: true,
+              audioMessage,
+              msg, // Pass full message for downloading
+            });
+          } catch (err) {
+            console.error(`❌ Error handling voice note:`, err);
+          }
+        }
+        continue;
+      }
+
       if (!text) continue;
 
-      const phoneJid = msg.key.remoteJid;
-      const phoneNumber = phoneJid.replace('@s.whatsapp.net', '');
-      const pushName = msg.pushName || null;
+      // Get sender info
+      const senderJid = isGroup ? (msg.key.participant || remoteJid) : remoteJid;
+      const phoneNumber = senderJid.replace('@s.whatsapp.net', '').replace('@lid', '');
+      const replyJid = remoteJid; // Reply to same chat (group or DM)
 
       if (messageHandler) {
         try {
-          await messageHandler({ phoneNumber, phoneJid, text, pushName });
+          await messageHandler({ phoneNumber, phoneJid: replyJid, text, pushName, isGroup });
         } catch (err) {
           console.error(`❌ Error handling message from ${phoneNumber}:`, err);
         }
@@ -194,4 +250,14 @@ export async function startWhatsApp() {
 
 export function getSocket() {
   return sock;
+}
+
+/**
+ * Download media from a message (for voice notes, images, etc.)
+ */
+export async function downloadMedia(msg) {
+  if (!sock) throw new Error('WhatsApp not connected');
+  const { downloadMediaMessage } = await import('baileys');
+  const buffer = await downloadMediaMessage(msg, 'buffer', {});
+  return buffer;
 }
