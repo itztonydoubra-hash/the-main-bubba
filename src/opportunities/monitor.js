@@ -13,6 +13,7 @@ import {
 } from '../db/supabase.js';
 import { generateOpportunityMessage, generateOpportunityFollowUp, generateDeadlineNudge } from '../ai/deepseek.js';
 import { sendMessage } from '../whatsapp/connection.js';
+import { scrapeOpportunities } from './scraper.js';
 
 // ═══════════════════════════════════════════
 // MATCHING LOGIC
@@ -269,13 +270,15 @@ export async function nudgeApproachingDeadlines() {
 
 /**
  * Run the complete opportunity cycle:
- * 1. Match new opportunities to users
- * 2. Deliver pending matches
- * 3. Follow up on silent ones
- * 4. Nudge approaching deadlines
+ * 1. Scrape new opportunities from sources
+ * 2. Match new opportunities to users
+ * 3. Deliver pending matches
+ * 4. Follow up on silent ones
+ * 5. Nudge approaching deadlines
  */
 export async function runOpportunityCycle() {
   console.log('🎯 Running opportunity cycle...');
+  await scrapeOpportunities();
   await runOpportunityMatching();
   await deliverOpportunityMatches();
   await followUpOnOpportunities();

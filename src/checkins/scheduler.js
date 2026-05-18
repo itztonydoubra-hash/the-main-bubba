@@ -45,12 +45,14 @@ async function processPendingCheckIns() {
 
 /**
  * Find users who have gone quiet and schedule check-ins for them
+ * Works for ALL users — not just those with goals
  */
 async function scheduleQuietUserCheckIns() {
   try {
     const inactiveUsers = await getInactiveUsers(3); // Inactive for 3+ days
 
     for (const user of inactiveUsers) {
+      // Check if we already have a pending check-in for this user (avoid spam)
       await scheduleCheckIn(
         user.phone_number,
         user.id,
@@ -226,12 +228,43 @@ async function silenceAccountabilityCheckIns() {
   }
 }
 
+/**
+ * Exam season check-ins — more frequent, more supportive
+ * Runs during May-July and November-December (NDU exam periods)
+ * Reaches out to ALL active users, not just those with goals
+ */
+async function examSeasonCheckIns() {
+  try {
+    const inactiveUsers = await getInactiveUsers(1); // Even 1 day quiet during exams
+
+    for (const user of inactiveUsers) {
+      const phoneJid = `${user.phone_number}@s.whatsapp.net`;
+
+      const message = await generateCheckInMessage(
+        user.context || {},
+        user.display_name,
+        'Exam season — checking in on how they are holding up'
+      );
+
+      await sendMessage(phoneJid, message);
+      console.log(`📚 Exam season check-in sent to ${user.phone_number}`);
+
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+    }
+  } catch (error) {
+    console.error('❌ Error in exam season check-ins:', error.message);
+  }
+}
+
 // ═══════════════════════════════════════════
 // SCHEDULER STARTUP
 // ═══════════════════════════════════════════
 
 /**
  * Start the full check-in scheduler (general + accountability)
+ * 
+ * All times are WAT (West Africa Time, UTC+1)
+ * node-cron runs in system timezone — we use the timezone option
  */
 export function startCheckInScheduler() {
   if (process.env.CHECK_IN_ENABLED !== 'true') {
@@ -239,61 +272,71 @@ export function startCheckInScheduler() {
     return;
   }
 
-  // General check-in cycle (default: 10am daily)
+  const tz = 'Africa/Lagos'; // WAT timezone
+
+  // General check-in cycle (10am WAT daily — catches quiet users)
   const generalCron = process.env.CHECK_IN_CRON || '0 10 * * *';
   cron.schedule(generalCron, async () => {
     console.log('🔔 Running general check-in cycle...');
     await scheduleQuietUserCheckIns();
     await processPendingCheckIns();
-  });
+  }, { timezone: tz });
 
   // Morning accountability check-in (8am WAT)
   cron.schedule('0 8 * * *', async () => {
     console.log('🌅 Running morning accountability check-ins...');
     await morningAccountabilityCheckIns();
-  });
+  }, { timezone: tz });
 
   // Evening accountability check-in (9pm WAT)
   cron.schedule('0 21 * * *', async () => {
     console.log('🌙 Running evening accountability check-ins...');
     await eveningAccountabilityCheckIns();
-  });
+  }, { timezone: tz });
 
   // Deadline check-ins (every 6 hours)
   cron.schedule('0 */6 * * *', async () => {
     console.log('⏰ Running deadline check-ins...');
     await deadlineCheckIns();
-  });
+  }, { timezone: tz });
 
-  // Silence-based accountability (2pm daily — mid-day nudge)
+  // Silence-based accountability (2pm WAT daily — mid-day nudge)
   cron.schedule('0 14 * * *', async () => {
     console.log('🤫 Running silence accountability check-ins...');
     await silenceAccountabilityCheckIns();
-  });
+  }, { timezone: tz });
 
-  // Opportunity cycle (11am and 5pm daily — match, deliver, follow up, nudge)
+  // Exam season intensified check-ins (May-July, Nov-Dec)
+  // Extra morning nudge at 7am during exam months
+  cron.schedule('0 7 * 5,6,7,11,12 *', async () => {
+    console.log('📚 Exam season check-in...');
+    await examSeasonCheckIns();
+  }, { timezone: tz });
+
+  // Opportunity cycle (11am and 5pm WAT daily — match, deliver, follow up, nudge)
   cron.schedule('0 11 * * *', async () => {
     console.log('🎯 Running opportunity cycle (morning)...');
     await runOpportunityCycle();
-  });
+  }, { timezone: tz });
 
   cron.schedule('0 17 * * *', async () => {
     console.log('🎯 Running opportunity cycle (evening)...');
     await runOpportunityCycle();
-  });
+  }, { timezone: tz });
 
   // Process any already-pending check-ins on startup
   setTimeout(async () => {
     await processPendingCheckIns();
   }, 5000);
 
-  console.log(`⏰ Check-in scheduler started:`);
+  console.log(`⏰ Check-in scheduler started (WAT timezone):`);
   console.log(`   📬 General: ${generalCron}`);
-  console.log(`   🌅 Morning accountability: 0 8 * * *`);
-  console.log(`   🌙 Evening accountability: 0 21 * * *`);
+  console.log(`   🌅 Morning accountability: 8am`);
+  console.log(`   🌙 Evening accountability: 9pm`);
   console.log(`   ⏰ Deadline nudges: every 6h`);
-  console.log(`   🤫 Silence nudges: 0 14 * * *`);
-  console.log(`   🎯 Opportunities: 0 11,17 * * *`);
+  console.log(`   🤫 Silence nudges: 2pm`);
+  console.log(`   📚 Exam season: 7am (May-Jul, Nov-Dec)`);
+  console.log(`   🎯 Opportunities: 11am, 5pm`);
 }
 
 /**
