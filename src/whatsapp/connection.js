@@ -1,7 +1,7 @@
 import makeWASocket, {
   DisconnectReason,
   useMultiFileAuthState,
-} from '@whiskeysockets/baileys';
+} from 'baileys';
 import pino from 'pino';
 import qrcode from 'qrcode-terminal';
 import path from 'path';
