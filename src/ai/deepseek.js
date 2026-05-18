@@ -17,7 +17,7 @@ const deepseek = new OpenAI({
  * @param {string} userName - User's display name (if known)
  * @returns {string} Bubba's response text
  */
-export async function generateResponse(conversationHistory, userContext = {}, userName = null) {
+export async function generateResponse(conversationHistory, userContext = {}, userName = null, extraContext = '') {
   // Build context addendum for the system prompt
   let contextBlock = '';
 
@@ -27,6 +27,10 @@ export async function generateResponse(conversationHistory, userContext = {}, us
 
   if (Object.keys(userContext).length > 0) {
     contextBlock += `\n\nHere's what you know about this person from past conversations:\n${JSON.stringify(userContext, null, 2)}`;
+  }
+
+  if (extraContext) {
+    contextBlock += extraContext;
   }
 
   const systemPrompt = BUBBA_SYSTEM_PROMPT + contextBlock;

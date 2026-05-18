@@ -27,6 +27,9 @@ import {
 import { generateResponse } from './ai/deepseek.js';
 import { detectCrisis, needsImmediateEscalation } from './crisis/detector.js';
 import { startCheckInScheduler, scheduleFollowUp } from './checkins/scheduler.js';
+import { extractContext } from './context/extractor.js';
+import { isFirstTimeUser, getOnboardingContext } from './onboarding/welcome.js';
+import { isAdmin, isAdminCommand, handleAdminCommand } from './admin/commands.js';
 
 // ═══════════════════════════════════════════
 // HEALTH CHECK SERVER (keeps Render alive)
@@ -78,7 +81,13 @@ async function handleIncomingMessage({ phoneNumber, phoneJid, text, pushName }) 
       user.display_name = pushName;
     }
 
-    // Step 2: Handle deletion requests
+    // Step 2: Handle admin commands
+    if (isAdmin(phoneNumber) && isAdminCommand(text)) {
+      await handleAdminCommand(text, phoneJid);
+      return;
+    }
+
+    // Step 3: Handle deletion requests
     if (isDeleteRequest(text)) {
       await deleteUserData(phoneNumber);
       await sendMessage(phoneJid, "Done. Everything's gone. If you ever want to talk again, just text me. No history, fresh start. Take care of yourself. 💛");
@@ -86,7 +95,10 @@ async function handleIncomingMessage({ phoneNumber, phoneJid, text, pushName }) 
       return;
     }
 
-    // Step 3: Crisis detection (runs in parallel with other fetches)
+    // Step 4: Run context extraction (learns from their message)
+    extractContext(text, user.id, phoneNumber);
+
+    // Step 5: Crisis detection (runs in parallel with other fetches)
     const crisisResult = detectCrisis(text);
 
     if (crisisResult.isCrisis) {
@@ -135,8 +147,16 @@ async function handleIncomingMessage({ phoneNumber, phoneJid, text, pushName }) 
     // Add the new message
     messages.push({ role: 'user', content: text });
 
-    // Step 7: Generate response from DeepSeek (with full context including goals)
-    const response = await generateResponse(messages, enrichedContext, user.display_name);
+    // Step 8: Check if first-time user (add onboarding context)
+    const firstTime = await isFirstTimeUser(phoneNumber);
+    let onboardingContext = '';
+    if (firstTime) {
+      onboardingContext = getOnboardingContext();
+      console.log(`   🆕 First-time user: ${phoneNumber}`);
+    }
+
+    // Step 9: Generate response from DeepSeek (with full context including goals)
+    const response = await generateResponse(messages, enrichedContext, user.display_name, onboardingContext);
 
     // Step 8: Save both messages to Supabase
     await saveMessage(phoneNumber, user.id, 'user', text);

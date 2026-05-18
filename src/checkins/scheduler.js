@@ -11,6 +11,7 @@ import {
 import { generateCheckInMessage, generateAccountabilityCheckIn } from '../ai/deepseek.js';
 import { sendMessage } from '../whatsapp/connection.js';
 import { runOpportunityCycle } from '../opportunities/monitor.js';
+import { sendWeeklyDigests } from '../checkins/weekly-digest.js';
 
 // ═══════════════════════════════════════════
 // GENERAL CHECK-INS (existing)
@@ -324,6 +325,12 @@ export function startCheckInScheduler() {
     await runOpportunityCycle();
   }, { timezone: tz });
 
+  // Weekly reflection digest (Sunday 8pm WAT)
+  cron.schedule('0 20 * * 0', async () => {
+    console.log('📝 Running weekly reflection digest...');
+    await sendWeeklyDigests();
+  }, { timezone: tz });
+
   // Process any already-pending check-ins on startup
   setTimeout(async () => {
     await processPendingCheckIns();
@@ -337,6 +344,7 @@ export function startCheckInScheduler() {
   console.log(`   🤫 Silence nudges: 2pm`);
   console.log(`   📚 Exam season: 7am (May-Jul, Nov-Dec)`);
   console.log(`   🎯 Opportunities: 11am, 5pm`);
+  console.log(`   📝 Weekly digest: Sunday 8pm`);
 }
 
 /**
