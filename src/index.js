@@ -36,21 +36,30 @@ import { isAdmin, isAdminCommand, handleAdminCommand } from './admin/commands.js
 // ═══════════════════════════════════════════
 
 /**
- * Transcribe audio buffer to text using OpenAI Whisper API
- * Falls back to a message if no transcription API is available
+ * Transcribe audio buffer to text using Groq Whisper API (free)
+ * Falls back to OpenAI Whisper if Groq key not set
  */
 async function transcribeAudio(buffer) {
-  const apiKey = process.env.OPENAI_API_KEY || process.env.DEEPSEEK_API_KEY;
-  const baseURL = process.env.OPENAI_API_KEY
-    ? 'https://api.openai.com/v1'
-    : 'https://api.deepseek.com';
+  const groqKey = process.env.GROQ_API_KEY;
+  const openaiKey = process.env.OPENAI_API_KEY;
+
+  const apiKey = groqKey || openaiKey;
+  const baseURL = groqKey
+    ? 'https://api.groq.com/openai/v1'
+    : 'https://api.openai.com/v1';
+  const model = groqKey ? 'whisper-large-v3' : 'whisper-1';
+
+  if (!apiKey) {
+    console.log('   ⚠️  No GROQ_API_KEY or OPENAI_API_KEY set — cannot transcribe');
+    return null;
+  }
 
   try {
     // Create form data with the audio buffer
     const blob = new Blob([buffer], { type: 'audio/ogg' });
     const formData = new FormData();
     formData.append('file', blob, 'voice.ogg');
-    formData.append('model', 'whisper-1');
+    formData.append('model', model);
     formData.append('language', 'en');
 
     const response = await fetch(`${baseURL}/audio/transcriptions`, {
