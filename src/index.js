@@ -13,7 +13,7 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 
 import http from 'http';
-import { startWhatsApp, onMessage, sendMessage, downloadMedia } from './whatsapp/connection.js';
+import { startWhatsApp, onMessage, sendMessage, downloadMedia, sendTyping, stopTyping, markAsRead } from './whatsapp/connection.js';
 import {
   getOrCreateUser,
   saveMessage,
@@ -29,6 +29,7 @@ import { analyzeImage } from './ai/vision.js';
 import { detectCrisis, needsImmediateEscalation } from './crisis/detector.js';
 import { startCheckInScheduler, scheduleFollowUp } from './checkins/scheduler.js';
 import { extractContext } from './context/extractor.js';
+import { detectAndSaveGoal } from './context/extractor.js';
 import { isFirstTimeUser, getOnboardingContext } from './onboarding/welcome.js';
 import { isAdmin, isAdminCommand, handleAdminCommand } from './admin/commands.js';
 import { detectReminder, saveReminder, processReminders } from './reminders/reminders.js';
@@ -124,6 +125,9 @@ console.log(`
  * 8. Send response back via WhatsApp
  */
 async function handleIncomingMessage({ phoneNumber, phoneJid, text, pushName, isGroup = false, isVoiceNote = false, audioMessage = null, msg = null, isImage = false, imageMessage = null }) {
+  // Mark message as read immediately (blue ticks)
+  if (msg) markAsRead(msg);
+
   // Handle images
   if (isImage) {
     console.log(`\n🖼️ [${phoneNumber}] ${pushName || 'Unknown'}: [Image${text ? ' + caption: "' + text.substring(0, 40) + '"' : ''}]`);
@@ -191,6 +195,21 @@ async function handleIncomingMessage({ phoneNumber, phoneJid, text, pushName, is
       return;
     }
 
+    // Step 2b: Handle "what can you do?" naturally
+    if (/what (can|do) you do/i.test(text) || /what are you/i.test(text) || /who are you/i.test(text)) {
+      const intro = `I'm Bubba. I'm someone you can text when things are hard — or when they're not.
+
+I listen. I remember. I check in on you. I find opportunities you'd miss. I help you stay accountable without being annoying about it.
+
+You can send me voice notes, pictures, or just text. Tell me to remind you about things. Talk to me about whatever — school, money, relationships, family, mental health.
+
+I'm not a therapist and I'm not a bot that gives generic advice. I'm just... here. Consistently.`;
+      await saveMessage(phoneNumber, user.id, 'user', text);
+      await saveMessage(phoneNumber, user.id, 'assistant', intro);
+      await sendMessage(phoneJid, intro);
+      return;
+    }
+
     // Step 3: Handle deletion requests
     if (isDeleteRequest(text)) {
       await deleteUserData(phoneNumber);
@@ -201,6 +220,9 @@ async function handleIncomingMessage({ phoneNumber, phoneJid, text, pushName, is
 
     // Step 4: Run context extraction (learns from their message)
     extractContext(text, user.id, phoneNumber);
+
+    // Step 4c: Check if user is stating a goal
+    detectAndSaveGoal(text, user.id, phoneNumber);
 
     // Step 4b: Check for reminder requests
     const reminder = detectReminder(text);
@@ -276,7 +298,9 @@ async function handleIncomingMessage({ phoneNumber, phoneJid, text, pushName, is
     }
 
     // Step 9: Generate response from DeepSeek (with full context including goals)
+    sendTyping(phoneJid);
     const response = await generateResponse(messages, enrichedContext, user.display_name, onboardingContext);
+    stopTyping(phoneJid);
 
     // Step 8: Save both messages to Supabase
     await saveMessage(phoneNumber, user.id, 'user', text);

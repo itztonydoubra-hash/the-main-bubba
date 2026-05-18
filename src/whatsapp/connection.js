@@ -37,6 +37,43 @@ export async function sendMessage(jid, text) {
 }
 
 /**
+ * Send typing indicator (composing) to show Bubba is "thinking"
+ */
+export async function sendTyping(jid) {
+  if (!sock) return;
+  try {
+    await sock.presenceSubscribe(jid);
+    await sock.sendPresenceUpdate('composing', jid);
+  } catch (err) {
+    // Silently ignore — typing indicator is not critical
+  }
+}
+
+/**
+ * Stop typing indicator
+ */
+export async function stopTyping(jid) {
+  if (!sock) return;
+  try {
+    await sock.sendPresenceUpdate('paused', jid);
+  } catch (err) {
+    // Silently ignore
+  }
+}
+
+/**
+ * Mark a message as read (blue ticks)
+ */
+export async function markAsRead(msg) {
+  if (!sock) return;
+  try {
+    await sock.readMessages([msg.key]);
+  } catch (err) {
+    // Silently ignore — read receipts are not critical
+  }
+}
+
+/**
  * Prompt user for input in terminal
  */
 function askQuestion(question) {
@@ -232,6 +269,10 @@ export async function startWhatsApp() {
       const imageMessage = msg.message?.imageMessage;
       const isImage = !!imageMessage;
 
+      // Check for sticker messages
+      const stickerMessage = msg.message?.stickerMessage;
+      const isSticker = !!stickerMessage;
+
       if (isImage) {
         if (messageHandler) {
           try {
@@ -258,6 +299,21 @@ export async function startWhatsApp() {
       }
 
       if (!text) continue;
+
+      // Handle sticker/emoji-only messages
+      if (isSticker && !text) {
+        if (messageHandler) {
+          const senderJid = isGroup ? (msg.key.participant || remoteJid) : remoteJid;
+          const phoneNumber = senderJid.replace('@s.whatsapp.net', '').replace('@lid', '');
+          const replyJid = remoteJid;
+          try {
+            await messageHandler({ phoneNumber, phoneJid: replyJid, text: '[sent a sticker]', pushName, isGroup });
+          } catch (err) {
+            // ignore sticker errors
+          }
+        }
+        continue;
+      }
 
       // Get sender info
       const senderJid = isGroup ? (msg.key.participant || remoteJid) : remoteJid;
