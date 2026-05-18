@@ -13,7 +13,7 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 
 import http from 'http';
-import { startWhatsApp, onMessage, sendMessage } from './whatsapp/connection.js';
+import { startWhatsApp, onMessage, sendMessage, downloadMedia } from './whatsapp/connection.js';
 import {
   getOrCreateUser,
   saveMessage,
@@ -30,6 +30,50 @@ import { startCheckInScheduler, scheduleFollowUp } from './checkins/scheduler.js
 import { extractContext } from './context/extractor.js';
 import { isFirstTimeUser, getOnboardingContext } from './onboarding/welcome.js';
 import { isAdmin, isAdminCommand, handleAdminCommand } from './admin/commands.js';
+
+// ═══════════════════════════════════════════
+// VOICE NOTE TRANSCRIPTION
+// ═══════════════════════════════════════════
+
+/**
+ * Transcribe audio buffer to text using OpenAI Whisper API
+ * Falls back to a message if no transcription API is available
+ */
+async function transcribeAudio(buffer) {
+  const apiKey = process.env.OPENAI_API_KEY || process.env.DEEPSEEK_API_KEY;
+  const baseURL = process.env.OPENAI_API_KEY
+    ? 'https://api.openai.com/v1'
+    : 'https://api.deepseek.com';
+
+  try {
+    // Create form data with the audio buffer
+    const blob = new Blob([buffer], { type: 'audio/ogg' });
+    const formData = new FormData();
+    formData.append('file', blob, 'voice.ogg');
+    formData.append('model', 'whisper-1');
+    formData.append('language', 'en');
+
+    const response = await fetch(`${baseURL}/audio/transcriptions`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+      },
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      console.log(`   ⚠️  Transcription API returned ${response.status}: ${errText.substring(0, 100)}`);
+      return null;
+    }
+
+    const result = await response.json();
+    return result.text || null;
+  } catch (error) {
+    console.error('   ⚠️  Transcription failed:', error.message);
+    return null;
+  }
+}
 
 // ═══════════════════════════════════════════
 // HEALTH CHECK SERVER (keeps Render alive)
@@ -68,8 +112,27 @@ console.log(`
  * 7. Save both messages to Supabase
  * 8. Send response back via WhatsApp
  */
-async function handleIncomingMessage({ phoneNumber, phoneJid, text, pushName }) {
-  console.log(`\n💬 [${phoneNumber}] ${pushName || 'Unknown'}: "${text.substring(0, 80)}${text.length > 80 ? '...' : ''}"`);
+async function handleIncomingMessage({ phoneNumber, phoneJid, text, pushName, isGroup = false, isVoiceNote = false, audioMessage = null, msg = null }) {
+  // Handle voice notes — transcribe first
+  if (isVoiceNote && !text) {
+    console.log(`\n🎤 [${phoneNumber}] ${pushName || 'Unknown'}: [Voice Note]`);
+    try {
+      const buffer = await downloadMedia(msg);
+      text = await transcribeAudio(buffer);
+      if (!text) {
+        await sendMessage(phoneJid, "I got your voice note but couldn't make out what you said. Could you type it out or send again?");
+        return;
+      }
+      console.log(`   📝 Transcribed: "${text.substring(0, 80)}${text.length > 80 ? '...' : ''}"`);
+    } catch (err) {
+      console.error('❌ Voice note transcription failed:', err.message);
+      await sendMessage(phoneJid, "I heard your voice note but something went wrong on my end trying to understand it. Can you type it out for me?");
+      return;
+    }
+  }
+
+  const groupPrefix = isGroup ? ' [GROUP]' : '';
+  console.log(`\n💬${groupPrefix} [${phoneNumber}] ${pushName || 'Unknown'}: "${text.substring(0, 80)}${text.length > 80 ? '...' : ''}"`);
 
   try {
     // Step 1: Get or create user
