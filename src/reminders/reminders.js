@@ -152,8 +152,9 @@ export async function processReminders() {
     if (!reminders || reminders.length === 0) return;
 
     for (const reminder of reminders) {
-      const phoneJid = `${reminder.phone_number}@s.whatsapp.net`;
-      const userName = reminder.users?.display_name || '';
+    const phone = reminder.phone_number;
+const phoneJid = phone.length > 15 ? `${phone}@lid` : `${phone}@s.whatsapp.net`;
+const userName = reminder.users?.display_name || '';
       const task = reminder.reason.replace('⏰ Reminder: ', '');
 
       // Send the reminder in Bubba's voice

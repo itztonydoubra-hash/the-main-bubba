@@ -33,7 +33,7 @@ export async function analyzeImage(imageBuffer, mimeType, caption = '', userCont
   const baseURL = groqKey
     ? 'https://api.groq.com/openai/v1'
     : 'https://api.deepseek.com';
-  const model = groqKey ? 'llama-3.2-90b-vision-preview' : 'deepseek-chat';
+  const model = groqKey ? 'meta-llama/llama-4-scout-17b-16e-instruct' : 'deepseek-chat';
 
   if (!apiKey) {
     return null;
