@@ -35,6 +35,98 @@ import { isAdmin, isAdminCommand, handleAdminCommand } from './admin/commands.js
 import { detectReminder, saveReminder, processReminders } from './reminders/reminders.js';
 
 // ═══════════════════════════════════════════
+// MESSAGE SPLITTING (feels like real texting)
+// ═══════════════════════════════════════════
+
+/**
+ * Split a long response into multiple short messages and send with delays
+ * Makes Bubba feel like she's actually typing multiple texts, not dumping a wall
+ */
+async function sendSplitMessages(jid, text) {
+  // If short enough, just send as one message
+  if (text.length < 300) {
+    await sendMessage(jid, text);
+    return;
+  }
+
+  // Split on double newlines (paragraph breaks) first
+  let chunks = text.split(/\n\n+/).filter((c) => c.trim());
+
+  // If only one chunk but still long, split on single newlines
+  if (chunks.length === 1 && text.length > 400) {
+    chunks = text.split(/\n/).filter((c) => c.trim());
+  }
+
+  // If still one chunk (no newlines at all), split by sentences
+  if (chunks.length === 1 && text.length > 400) {
+    chunks = text.match(/[^.!?]+[.!?]+/g) || [text];
+    // Group short sentences together
+    const grouped = [];
+    let current = '';
+    for (const sentence of chunks) {
+      if ((current + sentence).length > 200 && current) {
+        grouped.push(current.trim());
+        current = sentence;
+      } else {
+        current += sentence;
+      }
+    }
+    if (current.trim()) grouped.push(current.trim());
+    chunks = grouped;
+  }
+
+  // Cap at 4 messages max
+  if (chunks.length > 4) {
+    const merged = [];
+    const perChunk = Math.ceil(chunks.length / 4);
+    for (let i = 0; i < chunks.length; i += perChunk) {
+      merged.push(chunks.slice(i, i + perChunk).join('\n'));
+    }
+    chunks = merged;
+  }
+
+  // Send each chunk with a small delay
+  for (let i = 0; i < chunks.length; i++) {
+    if (chunks[i].trim()) {
+      await sendMessage(jid, chunks[i].trim());
+      if (i < chunks.length - 1) {
+        await new Promise((resolve) => setTimeout(resolve, 800 + Math.random() * 700));
+      }
+    }
+  }
+}
+
+// ═══════════════════════════════════════════
+// RATE LIMITING (prevents spam/abuse)
+// ═══════════════════════════════════════════
+
+const rateLimitMap = new Map(); // phoneNumber -> { count, firstMessageAt }
+const RATE_LIMIT_MAX = 15; // Max messages per window
+const RATE_LIMIT_WINDOW = 60 * 1000; // 1 minute window
+
+/**
+ * Check if a user is being rate limited
+ * Returns true if they should be throttled
+ */
+function isRateLimited(phoneNumber) {
+  const now = Date.now();
+  const entry = rateLimitMap.get(phoneNumber);
+
+  if (!entry || (now - entry.firstMessageAt > RATE_LIMIT_WINDOW)) {
+    // New window
+    rateLimitMap.set(phoneNumber, { count: 1, firstMessageAt: now });
+    return false;
+  }
+
+  entry.count++;
+  if (entry.count > RATE_LIMIT_MAX) {
+    return true;
+  }
+
+  return false;
+}
+
+// ═══════════════════════════════════════════
 // VOICE NOTE TRANSCRIPTION
 // ═══════════════════════════════════════════
 
@@ -179,6 +271,12 @@ async function handleIncomingMessage({ phoneNumber, phoneJid, text, pushName, is
   const groupPrefix = isGroup ? ' [GROUP]' : '';
   console.log(`\n💬${groupPrefix} [${phoneNumber}] ${pushName || 'Unknown'}: "${text.substring(0, 80)}${text.length > 80 ? '...' : ''}"`);
 
+  // Rate limit check — prevent spam
+  if (isRateLimited(phoneNumber)) {
+    console.log(`   🚫 Rate limited: ${phoneNumber}`);
+    return; // Silently ignore — don't even respond
+  }
+
   try {
     // Step 1: Get or create user
     const user = await getOrCreateUser(phoneNumber);
@@ -302,12 +400,12 @@ I'm not a therapist and I'm not a bot that gives generic advice. I'm just... her
     const response = await generateResponse(messages, enrichedContext, user.display_name, onboardingContext);
     stopTyping(phoneJid);
 
-    // Step 8: Save both messages to Supabase
+    // Step 10: Save both messages to Supabase
     await saveMessage(phoneNumber, user.id, 'user', text);
     await saveMessage(phoneNumber, user.id, 'assistant', response);
 
-    // Step 9: Send response back via WhatsApp
-    await sendMessage(phoneJid, response);
+    // Step 11: Send response back via WhatsApp (split long messages)
+    await sendSplitMessages(phoneJid, response);
 
     console.log(`✅ [${phoneNumber}] Bubba: "${response.substring(0, 80)}${response.length > 80 ? '...' : ''}"`);
 
