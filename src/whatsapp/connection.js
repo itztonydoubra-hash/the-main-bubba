@@ -20,7 +20,6 @@ const PAIRING_PHONE = process.env.PAIRING_PHONE || '';
 
 let sock = null;
 let messageHandler = null;
-let pairingRequested = false;
 
 /**
  * Set the handler that processes incoming messages
@@ -54,8 +53,8 @@ function askQuestion(question) {
  * Start the WhatsApp connection using Baileys
  */
 export async function startWhatsApp() {
-  // Clear corrupted auth on fresh start
-  if (USE_PAIRING_CODE && fs.existsSync(AUTH_DIR)) {
+  // Clear empty auth folder
+  if (fs.existsSync(AUTH_DIR)) {
     const files = fs.readdirSync(AUTH_DIR);
     if (files.length === 0) {
       fs.rmSync(AUTH_DIR, { recursive: true, force: true });
@@ -64,10 +63,12 @@ export async function startWhatsApp() {
 
   console.log('   Loading auth state...');
   const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
+
+  const isRegistered = state.creds.registered;
   console.log('   Auth state loaded.');
   console.log(`   USE_PAIRING_CODE: ${USE_PAIRING_CODE}`);
   console.log(`   PAIRING_PHONE: ${PAIRING_PHONE || '(not set)'}`);
-  console.log(`   Already registered: ${state.creds.registered || false}`);
+  console.log(`   Already registered: ${isRegistered || false}`);
   console.log('   Creating socket...');
 
   sock = makeWASocket({
@@ -78,6 +79,46 @@ export async function startWhatsApp() {
   });
 
   console.log('   Socket created.');
+
+  // REQUEST PAIRING CODE IMMEDIATELY (before connection.update fires)
+  // This must happen right after socket creation, before the 405 kills the connection
+  if (USE_PAIRING_CODE && !isRegistered) {
+    let phoneNumber = PAIRING_PHONE;
+    if (!phoneNumber) {
+      phoneNumber = await askQuestion('\n📱 Enter your WhatsApp phone number (with country code, no + or spaces):\n> ');
+    }
+
+    console.log(`\n⏳ Requesting pairing code for ${phoneNumber}...`);
+    console.log('   (Please wait a few seconds...)\n');
+
+    // Request pairing code immediately — don't wait
+    try {
+      const code = await sock.requestPairingCode(phoneNumber);
+      console.log('');
+      console.log('╔══════════════════════════════════════╗');
+      console.log(`║   🔑 PAIRING CODE:  ${code}        ║`);
+      console.log('╚══════════════════════════════════════╝');
+      console.log('');
+      console.log('   On your phone:');
+      console.log('   1. Open WhatsApp');
+      console.log('   2. Go to Settings → Linked Devices');
+      console.log('   3. Tap "Link a Device"');
+      console.log('   4. Tap "Link with phone number instead"');
+      console.log('   5. Enter the code above');
+      console.log('');
+      console.log('   Waiting for you to enter the code on your phone...');
+      console.log('');
+    } catch (err) {
+      console.error('❌ Failed to get pairing code:', err.message);
+      console.log('');
+      console.log('   Possible fixes:');
+      console.log('   1. Make sure the phone number is correct (country code + number, no +)');
+      console.log('   2. Delete auth_info/ folder and try again');
+      console.log('   3. Make sure WhatsApp is installed on that number');
+      console.log('   4. Wait 60 seconds and try again (rate limit)');
+      console.log('');
+    }
+  }
 
   // Handle connection updates
   sock.ev.on('connection.update', async (update) => {
@@ -90,41 +131,6 @@ export async function startWhatsApp() {
       console.log('\n   Open WhatsApp → Linked Devices → Link a Device → Scan QR\n');
     }
 
-    // Request pairing code when we get the first connection update
-    if (USE_PAIRING_CODE && !pairingRequested && !state.creds.registered) {
-      pairingRequested = true;
-
-      let phoneNumber = PAIRING_PHONE;
-      if (!phoneNumber) {
-        phoneNumber = await askQuestion('\n📱 Enter your WhatsApp phone number (with country code, no + or spaces):\n> ');
-      }
-
-      console.log(`\n⏳ Requesting pairing code for ${phoneNumber}...`);
-
-      // Wait a moment for WebSocket to be ready
-      setTimeout(async () => {
-        try {
-          const code = await sock.requestPairingCode(phoneNumber);
-          console.log(`\n╔══════════════════════════════════╗`);
-          console.log(`║  🔑 PAIRING CODE: ${code}     ║`);
-          console.log(`╚══════════════════════════════════╝\n`);
-          console.log('   On your phone:');
-          console.log('   1. Open WhatsApp');
-          console.log('   2. Go to Settings → Linked Devices');
-          console.log('   3. Tap "Link a Device"');
-          console.log('   4. Tap "Link with phone number instead"');
-          console.log('   5. Enter the code above\n');
-        } catch (err) {
-          console.error('❌ Failed to get pairing code:', err.message);
-          console.log('\n   Possible fixes:');
-          console.log('   1. Make sure the phone number is correct (country code + number, no +)');
-          console.log('   2. Delete auth_info/ folder and try again');
-          console.log('   3. Make sure WhatsApp is installed on that number\n');
-          pairingRequested = false; // Allow retry
-        }
-      }, 5000);
-    }
-
     if (connection === 'close') {
       const statusCode = lastDisconnect?.error?.output?.statusCode;
       console.log(`⚠️  Connection closed (status: ${statusCode})`);
@@ -132,26 +138,23 @@ export async function startWhatsApp() {
       if (statusCode === DisconnectReason.loggedOut) {
         console.log('❌ Logged out. Clearing auth and restarting...');
         fs.rmSync(AUTH_DIR, { recursive: true, force: true });
-        pairingRequested = false;
         setTimeout(() => startWhatsApp(), 3000);
-      } else if (statusCode === 405 && state.creds.registered) {
-        // Only auto-retry 405 if we were previously registered (session expired)
+      } else if (statusCode === 405 && isRegistered) {
+        // Session expired — clear and retry
         console.log('❌ 405 — Session expired. Clearing auth and restarting...');
         fs.rmSync(AUTH_DIR, { recursive: true, force: true });
-        pairingRequested = false;
         setTimeout(() => startWhatsApp(), 3000);
-      } else if (statusCode === 405 && !state.creds.registered) {
-        // Fresh connection got 405 — this is normal during pairing, ignore it
-        console.log('   (405 during fresh pairing — waiting for code entry on phone...)');
+      } else if (statusCode === 405 && !isRegistered) {
+        // Normal during pairing — don't loop, just wait
+        console.log('   (This is normal during pairing. Enter the code on your phone.)');
       } else {
-        console.log(`   Reconnecting in 5s...`);
+        console.log('   Reconnecting in 5s...');
         setTimeout(() => startWhatsApp(), 5000);
       }
     }
 
     if (connection === 'open') {
       console.log('✅ Bubba is connected to WhatsApp and ready.\n');
-      pairingRequested = false;
     }
   });
 
