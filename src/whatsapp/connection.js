@@ -43,7 +43,7 @@ export async function startWhatsApp() {
       creds: state.creds,
       keys: makeCacheableSignalKeyStore(state.keys, logger),
     },
-    printQRInTerminal: false,
+    printQRInTerminal: true,
     logger,
     browser: ['Bubba', 'Chrome', '1.0.0'],
   });
