@@ -25,11 +25,13 @@ import {
   getOpportunitySummary,
 } from './db/supabase.js';
 import { generateResponse } from './ai/deepseek.js';
+import { analyzeImage } from './ai/vision.js';
 import { detectCrisis, needsImmediateEscalation } from './crisis/detector.js';
 import { startCheckInScheduler, scheduleFollowUp } from './checkins/scheduler.js';
 import { extractContext } from './context/extractor.js';
 import { isFirstTimeUser, getOnboardingContext } from './onboarding/welcome.js';
 import { isAdmin, isAdminCommand, handleAdminCommand } from './admin/commands.js';
+import { detectReminder, saveReminder, processReminders } from './reminders/reminders.js';
 
 // ═══════════════════════════════════════════
 // VOICE NOTE TRANSCRIPTION
@@ -121,7 +123,37 @@ console.log(`
  * 7. Save both messages to Supabase
  * 8. Send response back via WhatsApp
  */
-async function handleIncomingMessage({ phoneNumber, phoneJid, text, pushName, isGroup = false, isVoiceNote = false, audioMessage = null, msg = null }) {
+async function handleIncomingMessage({ phoneNumber, phoneJid, text, pushName, isGroup = false, isVoiceNote = false, audioMessage = null, msg = null, isImage = false, imageMessage = null }) {
+  // Handle images
+  if (isImage) {
+    console.log(`\n🖼️ [${phoneNumber}] ${pushName || 'Unknown'}: [Image${text ? ' + caption: "' + text.substring(0, 40) + '"' : ''}]`);
+    try {
+      const user = await getOrCreateUser(phoneNumber);
+      if (pushName && !user.display_name) {
+        await updateUserName(user.id, pushName);
+      }
+
+      const buffer = await downloadMedia(msg);
+      const mimeType = imageMessage?.mimetype || 'image/jpeg';
+      const caption = text || '';
+
+      const response = await analyzeImage(buffer, mimeType, caption, user.context || {}, user.display_name);
+
+      if (response) {
+        await saveMessage(phoneNumber, user.id, 'user', caption || '[sent an image]');
+        await saveMessage(phoneNumber, user.id, 'assistant', response);
+        await sendMessage(phoneJid, response);
+        console.log(`✅ [${phoneNumber}] Bubba: "${response.substring(0, 80)}..."`);
+      } else {
+        await sendMessage(phoneJid, "I can see you sent a picture but I'm having trouble processing it right now. Can you tell me what's in it?");
+      }
+    } catch (err) {
+      console.error('❌ Image handling failed:', err.message);
+      await sendMessage(phoneJid, "I got your picture but something went wrong trying to look at it. What's it about?");
+    }
+    return;
+  }
+
   // Handle voice notes — transcribe first
   if (isVoiceNote && !text) {
     console.log(`\n🎤 [${phoneNumber}] ${pushName || 'Unknown'}: [Voice Note]`);
@@ -169,6 +201,22 @@ async function handleIncomingMessage({ phoneNumber, phoneJid, text, pushName, is
 
     // Step 4: Run context extraction (learns from their message)
     extractContext(text, user.id, phoneNumber);
+
+    // Step 4b: Check for reminder requests
+    const reminder = detectReminder(text);
+    if (reminder) {
+      try {
+        await saveReminder(phoneNumber, user.id, reminder.task, reminder.scheduledFor);
+        await sendMessage(phoneJid, `Got it. I'll remind you about "${reminder.task}" in ${reminder.humanTime}.`);
+        await saveMessage(phoneNumber, user.id, 'user', text);
+        await saveMessage(phoneNumber, user.id, 'assistant', `Got it. I'll remind you about "${reminder.task}" in ${reminder.humanTime}.`);
+        console.log(`   ⏰ Reminder set for ${phoneNumber}: "${reminder.task}" at ${reminder.scheduledFor.toISOString()}`);
+        return;
+      } catch (err) {
+        console.error('❌ Failed to save reminder:', err.message);
+        // Continue with normal response if reminder save fails
+      }
+    }
 
     // Step 5: Crisis detection (runs in parallel with other fetches)
     const crisisResult = detectCrisis(text);

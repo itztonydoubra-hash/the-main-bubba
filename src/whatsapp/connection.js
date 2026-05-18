@@ -228,6 +228,35 @@ export async function startWhatsApp() {
         continue;
       }
 
+      // Check for image messages
+      const imageMessage = msg.message?.imageMessage;
+      const isImage = !!imageMessage;
+
+      if (isImage) {
+        if (messageHandler) {
+          try {
+            const senderJid = isGroup ? (msg.key.participant || remoteJid) : remoteJid;
+            const phoneNumber = senderJid.replace('@s.whatsapp.net', '').replace('@lid', '');
+            const replyJid = remoteJid;
+            const caption = imageMessage.caption || '';
+
+            await messageHandler({
+              phoneNumber,
+              phoneJid: replyJid,
+              text: caption || null,
+              pushName,
+              isGroup,
+              isImage: true,
+              imageMessage,
+              msg,
+            });
+          } catch (err) {
+            console.error(`❌ Error handling image:`, err);
+          }
+        }
+        continue;
+      }
+
       if (!text) continue;
 
       // Get sender info
