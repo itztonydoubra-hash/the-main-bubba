@@ -12,6 +12,7 @@ import { generateCheckInMessage, generateAccountabilityCheckIn } from '../ai/dee
 import { sendMessage } from '../whatsapp/connection.js';
 import { runOpportunityCycle } from '../opportunities/monitor.js';
 import { sendWeeklyDigests } from '../checkins/weekly-digest.js';
+import { processReminders } from '../reminders/reminders.js';
 
 // ═══════════════════════════════════════════
 // GENERAL CHECK-INS (existing)
@@ -331,6 +332,11 @@ export function startCheckInScheduler() {
     await sendWeeklyDigests();
   }, { timezone: tz });
 
+  // Reminder check (every minute — checks for due reminders)
+  cron.schedule('* * * * *', async () => {
+    await processReminders();
+  }, { timezone: tz });
+
   // Process any already-pending check-ins on startup
   setTimeout(async () => {
     await processPendingCheckIns();
@@ -345,6 +351,7 @@ export function startCheckInScheduler() {
   console.log(`   📚 Exam season: 7am (May-Jul, Nov-Dec)`);
   console.log(`   🎯 Opportunities: 11am, 5pm`);
   console.log(`   📝 Weekly digest: Sunday 8pm`);
+  console.log(`   ⏰ Reminders: every minute`);
 }
 
 /**

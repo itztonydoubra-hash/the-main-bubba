@@ -14,6 +14,7 @@
  */
 
 import { updateUserContext, upsertUserInterest } from '../db/supabase.js';
+import { createGoal } from '../db/supabase.js';
 
 // ═══════════════════════════════════════════
 // INTEREST DETECTION
@@ -142,4 +143,68 @@ export async function extractContext(text, userId, phoneNumber) {
   }
 
   return { context: extractedContext, interests: extractedInterests };
+}
+
+// ═══════════════════════════════════════════
+// GOAL DETECTION FROM CONVERSATION
+// ═══════════════════════════════════════════
+
+const GOAL_PATTERNS = [
+  /i want to\s+(.+?)(?:\s+(?:this|next|every|by|before)\s+.+)?$/i,
+  /i('m| am) going to\s+(.+?)(?:\s+(?:this|next|every)\s+.+)?$/i,
+  /my goal is to\s+(.+)/i,
+  /i need to\s+(.+?)(?:\s+(?:today|tomorrow|this week|by)\s+.+)?$/i,
+  /i('m| am) trying to\s+(.+)/i,
+];
+
+/**
+ * Detect if user is stating a goal and save it
+ * Only triggers for clear goal statements, not casual mentions
+ */
+export async function detectAndSaveGoal(text, userId, phoneNumber) {
+  // Only match clear intent statements
+  const lower = text.toLowerCase();
+
+  // Skip if too short or a question
+  if (text.length < 15 || text.includes('?')) return null;
+
+  // Must contain goal-like language
+  if (!lower.includes('i want to') && !lower.includes('i\'m going to') && !lower.includes('my goal') && !lower.includes('i need to') && !lower.includes('i\'m trying to')) {
+    return null;
+  }
+
+  // Extract the goal text
+  for (const pattern of GOAL_PATTERNS) {
+    const match = text.match(pattern);
+    if (match) {
+      const goalText = (match[2] || match[1]).trim();
+
+      // Skip if goal is too vague or too short
+      if (goalText.length < 5 || goalText.length > 100) continue;
+
+      // Skip common non-goals
+      if (/^(know|understand|be|feel|think|see|find out)/i.test(goalText)) continue;
+
+      // Determine category
+      let category = 'personal_growth';
+      if (/stud|read|exam|assignment|moot|cgpa|class/i.test(goalText)) category = 'academic';
+      if (/money|save|earn|hustle|freelanc|pay/i.test(goalText)) category = 'financial';
+      if (/sleep|eat|exercise|gym|clean|meditat/i.test(goalText)) category = 'life';
+
+      try {
+        const goal = await createGoal(phoneNumber, userId, {
+          title: goalText.substring(0, 100),
+          category,
+          frequency: /every day|daily/i.test(text) ? 'daily' : /every week|weekly/i.test(text) ? 'weekly' : 'once',
+        });
+        console.log(`   🎯 Goal detected and saved: "${goalText}" (${category})`);
+        return goal;
+      } catch (err) {
+        // Silently skip
+        return null;
+      }
+    }
+  }
+
+  return null;
 }

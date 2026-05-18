@@ -13,7 +13,7 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 
 import http from 'http';
-import { startWhatsApp, onMessage, sendMessage, downloadMedia } from './whatsapp/connection.js';
+import { startWhatsApp, onMessage, sendMessage, downloadMedia, sendTyping, stopTyping, markAsRead } from './whatsapp/connection.js';
 import {
   getOrCreateUser,
   saveMessage,
@@ -25,11 +25,106 @@ import {
   getOpportunitySummary,
 } from './db/supabase.js';
 import { generateResponse } from './ai/deepseek.js';
+import { analyzeImage } from './ai/vision.js';
 import { detectCrisis, needsImmediateEscalation } from './crisis/detector.js';
 import { startCheckInScheduler, scheduleFollowUp } from './checkins/scheduler.js';
 import { extractContext } from './context/extractor.js';
+import { detectAndSaveGoal } from './context/extractor.js';
 import { isFirstTimeUser, getOnboardingContext } from './onboarding/welcome.js';
 import { isAdmin, isAdminCommand, handleAdminCommand } from './admin/commands.js';
+import { detectReminder, saveReminder, processReminders } from './reminders/reminders.js';
+
+// ═══════════════════════════════════════════
+// MESSAGE SPLITTING (feels like real texting)
+// ═══════════════════════════════════════════
+
+/**
+ * Split a long response into multiple short messages and send with delays
+ * Makes Bubba feel like she's actually typing multiple texts, not dumping a wall
+ */
+async function sendSplitMessages(jid, text) {
+  // If short enough, just send as one message
+  if (text.length < 300) {
+    await sendMessage(jid, text);
+    return;
+  }
+
+  // Split on double newlines (paragraph breaks) first
+  let chunks = text.split(/\n\n+/).filter((c) => c.trim());
+
+  // If only one chunk but still long, split on single newlines
+  if (chunks.length === 1 && text.length > 400) {
+    chunks = text.split(/\n/).filter((c) => c.trim());
+  }
+
+  // If still one chunk (no newlines at all), split by sentences
+  if (chunks.length === 1 && text.length > 400) {
+    chunks = text.match(/[^.!?]+[.!?]+/g) || [text];
+    // Group short sentences together
+    const grouped = [];
+    let current = '';
+    for (const sentence of chunks) {
+      if ((current + sentence).length > 200 && current) {
+        grouped.push(current.trim());
+        current = sentence;
+      } else {
+        current += sentence;
+      }
+    }
+    if (current.trim()) grouped.push(current.trim());
+    chunks = grouped;
+  }
+
+  // Cap at 4 messages max
+  if (chunks.length > 4) {
+    const merged = [];
+    const perChunk = Math.ceil(chunks.length / 4);
+    for (let i = 0; i < chunks.length; i += perChunk) {
+      merged.push(chunks.slice(i, i + perChunk).join('\n'));
+    }
+    chunks = merged;
+  }
+
+  // Send each chunk with a small delay
+  for (let i = 0; i < chunks.length; i++) {
+    if (chunks[i].trim()) {
+      await sendMessage(jid, chunks[i].trim());
+      if (i < chunks.length - 1) {
+        await new Promise((resolve) => setTimeout(resolve, 800 + Math.random() * 700));
+      }
+    }
+  }
+}
+
+// ═══════════════════════════════════════════
+// RATE LIMITING (prevents spam/abuse)
+// ═══════════════════════════════════════════
+
+const rateLimitMap = new Map(); // phoneNumber -> { count, firstMessageAt }
+const RATE_LIMIT_MAX = 15; // Max messages per window
+const RATE_LIMIT_WINDOW = 60 * 1000; // 1 minute window
+
+/**
+ * Check if a user is being rate limited
+ * Returns true if they should be throttled
+ */
+function isRateLimited(phoneNumber) {
+  const now = Date.now();
+  const entry = rateLimitMap.get(phoneNumber);
+
+  if (!entry || (now - entry.firstMessageAt > RATE_LIMIT_WINDOW)) {
+    // New window
+    rateLimitMap.set(phoneNumber, { count: 1, firstMessageAt: now });
+    return false;
+  }
+
+  entry.count++;
+  if (entry.count > RATE_LIMIT_MAX) {
+    return true;
+  }
+
+  return false;
+}
 
 // ═══════════════════════════════════════════
 // VOICE NOTE TRANSCRIPTION
@@ -121,7 +216,40 @@ console.log(`
  * 7. Save both messages to Supabase
  * 8. Send response back via WhatsApp
  */
-async function handleIncomingMessage({ phoneNumber, phoneJid, text, pushName, isGroup = false, isVoiceNote = false, audioMessage = null, msg = null }) {
+async function handleIncomingMessage({ phoneNumber, phoneJid, text, pushName, isGroup = false, isVoiceNote = false, audioMessage = null, msg = null, isImage = false, imageMessage = null }) {
+  // Mark message as read immediately (blue ticks)
+  if (msg) markAsRead(msg);
+
+  // Handle images
+  if (isImage) {
+    console.log(`\n🖼️ [${phoneNumber}] ${pushName || 'Unknown'}: [Image${text ? ' + caption: "' + text.substring(0, 40) + '"' : ''}]`);
+    try {
+      const user = await getOrCreateUser(phoneNumber);
+      if (pushName && !user.display_name) {
+        await updateUserName(user.id, pushName);
+      }
+
+      const buffer = await downloadMedia(msg);
+      const mimeType = imageMessage?.mimetype || 'image/jpeg';
+      const caption = text || '';
+
+      const response = await analyzeImage(buffer, mimeType, caption, user.context || {}, user.display_name);
+
+      if (response) {
+        await saveMessage(phoneNumber, user.id, 'user', caption || '[sent an image]');
+        await saveMessage(phoneNumber, user.id, 'assistant', response);
+        await sendMessage(phoneJid, response);
+        console.log(`✅ [${phoneNumber}] Bubba: "${response.substring(0, 80)}..."`);
+      } else {
+        await sendMessage(phoneJid, "I can see you sent a picture but I'm having trouble processing it right now. Can you tell me what's in it?");
+      }
+    } catch (err) {
+      console.error('❌ Image handling failed:', err.message);
+      await sendMessage(phoneJid, "I got your picture but something went wrong trying to look at it. What's it about?");
+    }
+    return;
+  }
+
   // Handle voice notes — transcribe first
   if (isVoiceNote && !text) {
     console.log(`\n🎤 [${phoneNumber}] ${pushName || 'Unknown'}: [Voice Note]`);
@@ -143,6 +271,12 @@ async function handleIncomingMessage({ phoneNumber, phoneJid, text, pushName, is
   const groupPrefix = isGroup ? ' [GROUP]' : '';
   console.log(`\n💬${groupPrefix} [${phoneNumber}] ${pushName || 'Unknown'}: "${text.substring(0, 80)}${text.length > 80 ? '...' : ''}"`);
 
+  // Rate limit check — prevent spam
+  if (isRateLimited(phoneNumber)) {
+    console.log(`   🚫 Rate limited: ${phoneNumber}`);
+    return; // Silently ignore — don't even respond
+  }
+
   try {
     // Step 1: Get or create user
     const user = await getOrCreateUser(phoneNumber);
@@ -159,6 +293,21 @@ async function handleIncomingMessage({ phoneNumber, phoneJid, text, pushName, is
       return;
     }
 
+    // Step 2b: Handle "what can you do?" naturally
+    if (/what (can|do) you do/i.test(text) || /what are you/i.test(text) || /who are you/i.test(text)) {
+      const intro = `I'm Bubba. I'm someone you can text when things are hard — or when they're not.
+
+I listen. I remember. I check in on you. I find opportunities you'd miss. I help you stay accountable without being annoying about it.
+
+You can send me voice notes, pictures, or just text. Tell me to remind you about things. Talk to me about whatever — school, money, relationships, family, mental health.
+
+I'm not a therapist and I'm not a bot that gives generic advice. I'm just... here. Consistently.`;
+      await saveMessage(phoneNumber, user.id, 'user', text);
+      await saveMessage(phoneNumber, user.id, 'assistant', intro);
+      await sendMessage(phoneJid, intro);
+      return;
+    }
+
     // Step 3: Handle deletion requests
     if (isDeleteRequest(text)) {
       await deleteUserData(phoneNumber);
@@ -169,6 +318,25 @@ async function handleIncomingMessage({ phoneNumber, phoneJid, text, pushName, is
 
     // Step 4: Run context extraction (learns from their message)
     extractContext(text, user.id, phoneNumber);
+
+    // Step 4c: Check if user is stating a goal
+    detectAndSaveGoal(text, user.id, phoneNumber);
+
+    // Step 4b: Check for reminder requests
+    const reminder = detectReminder(text);
+    if (reminder) {
+      try {
+        await saveReminder(phoneNumber, user.id, reminder.task, reminder.scheduledFor);
+        await sendMessage(phoneJid, `Got it. I'll remind you about "${reminder.task}" in ${reminder.humanTime}.`);
+        await saveMessage(phoneNumber, user.id, 'user', text);
+        await saveMessage(phoneNumber, user.id, 'assistant', `Got it. I'll remind you about "${reminder.task}" in ${reminder.humanTime}.`);
+        console.log(`   ⏰ Reminder set for ${phoneNumber}: "${reminder.task}" at ${reminder.scheduledFor.toISOString()}`);
+        return;
+      } catch (err) {
+        console.error('❌ Failed to save reminder:', err.message);
+        // Continue with normal response if reminder save fails
+      }
+    }
 
     // Step 5: Crisis detection (runs in parallel with other fetches)
     const crisisResult = detectCrisis(text);
@@ -228,14 +396,16 @@ async function handleIncomingMessage({ phoneNumber, phoneJid, text, pushName, is
     }
 
     // Step 9: Generate response from DeepSeek (with full context including goals)
+    sendTyping(phoneJid);
     const response = await generateResponse(messages, enrichedContext, user.display_name, onboardingContext);
+    stopTyping(phoneJid);
 
-    // Step 8: Save both messages to Supabase
+    // Step 10: Save both messages to Supabase
     await saveMessage(phoneNumber, user.id, 'user', text);
     await saveMessage(phoneNumber, user.id, 'assistant', response);
 
-    // Step 9: Send response back via WhatsApp
-    await sendMessage(phoneJid, response);
+    // Step 11: Send response back via WhatsApp (split long messages)
+    await sendSplitMessages(phoneJid, response);
 
     console.log(`✅ [${phoneNumber}] Bubba: "${response.substring(0, 80)}${response.length > 80 ? '...' : ''}"`);
 
