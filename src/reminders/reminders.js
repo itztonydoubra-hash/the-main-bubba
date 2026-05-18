@@ -152,8 +152,8 @@ export async function processReminders() {
     if (!reminders || reminders.length === 0) return;
 
     for (const reminder of reminders) {
-    const phone = reminder.phone_number;
-const phoneJid = phone.length > 15 ? `${phone}@lid` : `${phone}@s.whatsapp.net`;
+   const phone = reminder.phone_number;
+const phoneJid = `${phone}@lid`;
 const userName = reminder.users?.display_name || '';
       const task = reminder.reason.replace('⏰ Reminder: ', '');
 
