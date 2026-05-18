@@ -3,7 +3,6 @@ import makeWASocket, {
   useMultiFileAuthState,
   makeCacheableSignalKeyStore,
 } from '@whiskeysockets/baileys';
-import { Boom } from '@hapi/boom';
 import pino from 'pino';
 import qrcode from 'qrcode-terminal';
 import path from 'path';
@@ -36,7 +35,9 @@ export async function sendMessage(jid, text) {
  * Start the WhatsApp connection using Baileys
  */
 export async function startWhatsApp() {
+  console.log('   Loading auth state...');
   const { state, saveCreds } = await useMultiFileAuthState(AUTH_DIR);
+  console.log('   Auth state loaded. Creating socket...');
 
   sock = makeWASocket({
     auth: {
@@ -48,10 +49,13 @@ export async function startWhatsApp() {
     browser: ['Bubba', 'Chrome', '1.0.0'],
   });
 
+  console.log('   Socket created. Waiting for connection...');
+
   // Handle connection updates
   sock.ev.on('connection.update', (update) => {
     const { connection, lastDisconnect, qr } = update;
 
+    // Also generate QR manually in case printQRInTerminal doesn't work
     if (qr) {
       console.log('\n📱 Scan this QR code with WhatsApp:\n');
       qrcode.generate(qr, { small: true });
@@ -59,13 +63,13 @@ export async function startWhatsApp() {
     }
 
     if (connection === 'close') {
-      const reason = new Boom(lastDisconnect?.error)?.output?.statusCode;
+      const statusCode = lastDisconnect?.error?.output?.statusCode;
 
-      if (reason === DisconnectReason.loggedOut) {
+      if (statusCode === DisconnectReason.loggedOut) {
         console.log('❌ Logged out. Delete auth_info/ and restart to re-authenticate.');
       } else {
-        console.log(`⚠️  Connection closed (reason: ${reason}). Reconnecting...`);
-        startWhatsApp(); // Reconnect
+        console.log(`⚠️  Connection closed (reason: ${statusCode}). Reconnecting in 3s...`);
+        setTimeout(() => startWhatsApp(), 3000);
       }
     }
 

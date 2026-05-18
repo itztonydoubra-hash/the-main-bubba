@@ -778,21 +778,5 @@ export async function deleteUserData(phoneNumber) {
   await supabase.from('messages').delete().eq('user_id', user.id);
   await supabase.from('users').delete().eq('id', user.id);
 }
-export async function getHistory(phoneNumber) {
-  try {
-    const user = await getOrCreateUser(phoneNumber)
-    if (!user) return []
-    const { data, error } = await supabase
-      .from('messages')
-      .select('role, content')
-      .eq('user_id', user.id)
-      .order('created_at', { ascending: true })
-      .limit(20)
-    if (error) return []
-    return data || []
-  } catch (err) {
-    console.error('Error getting history:', err)
-    return []
-  }
-}
+
 export default supabase;
