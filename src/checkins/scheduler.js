@@ -3,6 +3,7 @@ import {
   getPendingCheckIns,
   markCheckInSent,
   getInactiveUsers,
+  getRecentlyActiveUsers,
   scheduleCheckIn,
   getGoalsWithUpcomingDeadlines,
   getUsersWithRecurringGoals,
@@ -77,9 +78,10 @@ async function scheduleQuietUserCheckIns() {
 
 /**
  * Morning accountability check-in for users with daily goals
- * Runs at ~8am — asks what they're tackling today
+ * Schedules into checkin_schedule table, then processes pending
+ * Runs at 7am UTC (8am WAT)
  */
-async function morningAccountabilityCheckIns() {
+async function scheduleMorningCheckIns() {
   try {
     const recurringGoals = await getUsersWithRecurringGoals();
 
@@ -92,31 +94,46 @@ async function morningAccountabilityCheckIns() {
           goals: [],
           userName: goal.users?.display_name || null,
           userContext: goal.users?.context || {},
+          userId: goal.user_id,
         };
       }
       userGoals[phone].goals.push(goal);
     }
 
+    let scheduled = 0;
     for (const [phoneNumber, data] of Object.entries(userGoals)) {
-      // Only send daily check-ins for daily goals (weekly ones get checked weekly)
       const dailyGoals = data.goals.filter((g) => g.frequency === 'daily');
       if (dailyGoals.length === 0) continue;
 
-      const phoneJid = `${phoneNumber}@s.whatsapp.net`;
-      const goalTitles = dailyGoals.map((g) => g.title);
-
-      const message = await generateAccountabilityCheckIn({
-        type: 'morning',
-        userName: data.userName,
-        userContext: data.userContext,
-        goals: goalTitles,
-      });
-
-      await sendMessage(phoneJid, message);
-      console.log(`🌅 Morning check-in sent to ${phoneNumber} (${dailyGoals.length} daily goal(s))`);
-
-      await new Promise((resolve) => setTimeout(resolve, 2000));
+      const goalTitles = dailyGoals.map((g) => g.title).join(', ');
+      await scheduleCheckIn(
+        phoneNumber,
+        data.userId,
+        `Morning accountability — daily goals: ${goalTitles}`,
+        new Date().toISOString()
+      );
+      scheduled++;
     }
+
+    // Fallback: if no users have daily goals, reach out to recently active users
+    if (scheduled === 0) {
+      const recentUsers = await getRecentlyActiveUsers(3);
+      for (const user of recentUsers) {
+        await scheduleCheckIn(
+          user.phone_number,
+          user.id,
+          'Morning check-in — staying connected',
+          new Date().toISOString()
+        );
+      }
+      if (recentUsers.length > 0) {
+        console.log(`🌅 No daily goals found, scheduled ${recentUsers.length} recently active user(s) instead`);
+      }
+    } else {
+      console.log(`🌅 Scheduled morning check-ins for ${scheduled} user(s) with daily goals`);
+    }
+
+    await processPendingCheckIns();
   } catch (error) {
     console.error('❌ Error in morning accountability check-ins:', error.message);
   }
@@ -124,9 +141,10 @@ async function morningAccountabilityCheckIns() {
 
 /**
  * Evening accountability check-in — asks how the day went
- * Runs at ~9pm
+ * Schedules into checkin_schedule table, then processes pending
+ * Runs at 8pm UTC (9pm WAT)
  */
-async function eveningAccountabilityCheckIns() {
+async function scheduleEveningCheckIns() {
   try {
     const recurringGoals = await getUsersWithRecurringGoals();
 
@@ -139,30 +157,46 @@ async function eveningAccountabilityCheckIns() {
           goals: [],
           userName: goal.users?.display_name || null,
           userContext: goal.users?.context || {},
+          userId: goal.user_id,
         };
       }
       userGoals[phone].goals.push(goal);
     }
 
+    let scheduled = 0;
     for (const [phoneNumber, data] of Object.entries(userGoals)) {
       const dailyGoals = data.goals.filter((g) => g.frequency === 'daily');
       if (dailyGoals.length === 0) continue;
 
-      const phoneJid = `${phoneNumber}@s.whatsapp.net`;
-      const goalTitles = dailyGoals.map((g) => g.title);
-
-      const message = await generateAccountabilityCheckIn({
-        type: 'evening',
-        userName: data.userName,
-        userContext: data.userContext,
-        goals: goalTitles,
-      });
-
-      await sendMessage(phoneJid, message);
-      console.log(`🌙 Evening check-in sent to ${phoneNumber} (${dailyGoals.length} daily goal(s))`);
-
-      await new Promise((resolve) => setTimeout(resolve, 2000));
+      const goalTitles = dailyGoals.map((g) => g.title).join(', ');
+      await scheduleCheckIn(
+        phoneNumber,
+        data.userId,
+        `Evening accountability — how did today go: ${goalTitles}`,
+        new Date().toISOString()
+      );
+      scheduled++;
     }
+
+    // Fallback: if no users have daily goals, reach out to recently active users
+    if (scheduled === 0) {
+      const recentUsers = await getRecentlyActiveUsers(3);
+      for (const user of recentUsers) {
+        await scheduleCheckIn(
+          user.phone_number,
+          user.id,
+          'Evening check-in — how was your day',
+          new Date().toISOString()
+        );
+      }
+      if (recentUsers.length > 0) {
+        console.log(`🌙 No daily goals found, scheduled ${recentUsers.length} recently active user(s) instead`);
+      }
+    } else {
+      console.log(`🌙 Scheduled evening check-ins for ${scheduled} user(s) with daily goals`);
+    }
+
+    await processPendingCheckIns();
   } catch (error) {
     console.error('❌ Error in evening accountability check-ins:', error.message);
   }
@@ -201,6 +235,7 @@ async function deadlineCheckIns() {
 /**
  * Silence-based accountability check-in
  * For users who have active goals but haven't texted in a while
+ * Schedules into checkin_schedule table, then processes pending
  */
 async function silenceAccountabilityCheckIns() {
   try {
@@ -210,21 +245,18 @@ async function silenceAccountabilityCheckIns() {
       const goals = await getActiveGoals(user.phone_number);
       if (goals.length === 0) continue; // Only nudge if they have active goals
 
-      const phoneJid = `${user.phone_number}@s.whatsapp.net`;
-      const goalTitles = goals.map((g) => g.title).slice(0, 3); // Top 3
+      const goalTitles = goals.map((g) => g.title).slice(0, 3).join(', ');
+      await scheduleCheckIn(
+        user.phone_number,
+        user.id,
+        `Silence nudge — active goals: ${goalTitles}`,
+        new Date().toISOString()
+      );
 
-      const message = await generateAccountabilityCheckIn({
-        type: 'silence',
-        userName: user.display_name,
-        userContext: user.context || {},
-        goals: goalTitles,
-      });
-
-      await sendMessage(phoneJid, message);
-      console.log(`🤫 Silence check-in sent to ${user.phone_number} (${goals.length} active goal(s))`);
-
-      await new Promise((resolve) => setTimeout(resolve, 2000));
+      console.log(`🤫 Scheduled silence check-in for ${user.phone_number} (${goals.length} active goal(s))`);
     }
+
+    await processPendingCheckIns();
   } catch (error) {
     console.error('❌ Error in silence accountability check-ins:', error.message);
   }
@@ -232,27 +264,25 @@ async function silenceAccountabilityCheckIns() {
 
 /**
  * Exam season check-ins — more frequent, more supportive
- * Runs during May-July and November-December (NDU exam periods)
- * Reaches out to ALL active users, not just those with goals
+ * Runs during late May and early June (NDU exam periods)
+ * Schedules into checkin_schedule table, then processes pending
  */
 async function examSeasonCheckIns() {
   try {
     const inactiveUsers = await getInactiveUsers(1); // Even 1 day quiet during exams
 
     for (const user of inactiveUsers) {
-      const phoneJid = `${user.phone_number}@s.whatsapp.net`;
-
-      const message = await generateCheckInMessage(
-        user.context || {},
-        user.display_name,
-        'Exam season — checking in on how they are holding up'
+      await scheduleCheckIn(
+        user.phone_number,
+        user.id,
+        'Exam season — checking in on how they are holding up',
+        new Date().toISOString()
       );
 
-      await sendMessage(phoneJid, message);
-      console.log(`📚 Exam season check-in sent to ${user.phone_number}`);
-
-      await new Promise((resolve) => setTimeout(resolve, 2000));
+      console.log(`📚 Scheduled exam season check-in for ${user.phone_number}`);
     }
+
+    await processPendingCheckIns();
   } catch (error) {
     console.error('❌ Error in exam season check-ins:', error.message);
   }
@@ -265,8 +295,8 @@ async function examSeasonCheckIns() {
 /**
  * Start the full check-in scheduler (general + accountability)
  * 
- * All times are WAT (West Africa Time, UTC+1)
- * node-cron runs in system timezone — we use the timezone option
+ * All cron times are in UTC.
+ * WAT (West Africa Time) = UTC+1, so we subtract 1 hour.
  */
 export function startCheckInScheduler() {
   if (process.env.CHECK_IN_ENABLED !== 'true') {
@@ -274,83 +304,87 @@ export function startCheckInScheduler() {
     return;
   }
 
-  const tz = 'Africa/Lagos'; // WAT timezone
-
-  // General check-in cycle (10am WAT daily — catches quiet users)
-  const generalCron = process.env.CHECK_IN_CRON || '0 10 * * *';
+  // General check-in cycle (9am UTC = 10am WAT daily — catches quiet users)
+  const generalCron = process.env.CHECK_IN_CRON || '0 9 * * *';
   cron.schedule(generalCron, async () => {
     console.log('🔔 Running general check-in cycle...');
     await scheduleQuietUserCheckIns();
     await processPendingCheckIns();
-  }, { timezone: tz });
+  });
 
-  // Morning accountability check-in (8am WAT)
-  cron.schedule('0 8 * * *', async () => {
+  // Morning accountability check-in (7am UTC = 8am WAT)
+  cron.schedule('0 7 * * *', async () => {
     console.log('🌅 Running morning accountability check-ins...');
-    await morningAccountabilityCheckIns();
-  }, { timezone: tz });
+    await scheduleMorningCheckIns();
+  });
 
-  // Evening accountability check-in (9pm WAT)
-  cron.schedule('0 21 * * *', async () => {
+  // Evening accountability check-in (8pm UTC = 9pm WAT)
+  cron.schedule('0 20 * * *', async () => {
     console.log('🌙 Running evening accountability check-ins...');
-    await eveningAccountabilityCheckIns();
-  }, { timezone: tz });
+    await scheduleEveningCheckIns();
+  });
 
   // Deadline check-ins (every 6 hours)
   cron.schedule('0 */6 * * *', async () => {
     console.log('⏰ Running deadline check-ins...');
     await deadlineCheckIns();
-  }, { timezone: tz });
+  });
 
-  // Silence-based accountability (2pm WAT daily — mid-day nudge)
-  cron.schedule('0 14 * * *', async () => {
+  // Silence-based accountability (1pm UTC = 2pm WAT daily — mid-day nudge)
+  cron.schedule('0 13 * * *', async () => {
     console.log('🤫 Running silence accountability check-ins...');
     await silenceAccountabilityCheckIns();
-  }, { timezone: tz });
+  });
 
-  // Exam season intensified check-ins (May-July, Nov-Dec)
-  // Extra morning nudge at 7am during exam months
-  cron.schedule('0 7 * 5,6,7,11,12 *', async () => {
-    console.log('📚 Exam season check-in...');
+  // Exam season intensified check-ins (late May and early June)
+  // 6am UTC = 7am WAT — last days of May
+  cron.schedule('0 6 27-31 5 *', async () => {
+    console.log('📚 Exam season check-in (late May)...');
     await examSeasonCheckIns();
-  }, { timezone: tz });
+  });
 
-  // Opportunity cycle (11am and 5pm WAT daily — match, deliver, follow up, nudge)
-  cron.schedule('0 11 * * *', async () => {
+  // 6am UTC = 7am WAT — first days of June
+  cron.schedule('0 6 1-9 6 *', async () => {
+    console.log('📚 Exam season check-in (early June)...');
+    await examSeasonCheckIns();
+  });
+
+  // Opportunity cycle (10am UTC = 11am WAT and 4pm UTC = 5pm WAT daily)
+  cron.schedule('0 10 * * *', async () => {
     console.log('🎯 Running opportunity cycle (morning)...');
     await runOpportunityCycle();
-  }, { timezone: tz });
+  });
 
-  cron.schedule('0 17 * * *', async () => {
+  cron.schedule('0 16 * * *', async () => {
     console.log('🎯 Running opportunity cycle (evening)...');
     await runOpportunityCycle();
-  }, { timezone: tz });
+  });
 
-  // Weekly reflection digest (Sunday 8pm WAT)
-  cron.schedule('0 20 * * 0', async () => {
+  // Weekly reflection digest (Sunday 7pm UTC = Sunday 8pm WAT)
+  cron.schedule('0 19 * * 0', async () => {
     console.log('📝 Running weekly reflection digest...');
     await sendWeeklyDigests();
-  }, { timezone: tz });
+  });
 
   // Reminder check (every minute — checks for due reminders)
   cron.schedule('* * * * *', async () => {
     await processReminders();
-  }, { timezone: tz });
+  });
 
   // Process any already-pending check-ins on startup
   setTimeout(async () => {
     await processPendingCheckIns();
   }, 5000);
 
-  console.log(`⏰ Check-in scheduler started (WAT timezone):`);
+  console.log(`⏰ Check-in scheduler started (all times UTC):`);
   console.log(`   📬 General: ${generalCron}`);
-  console.log(`   🌅 Morning accountability: 8am`);
-  console.log(`   🌙 Evening accountability: 9pm`);
+  console.log(`   🌅 Morning accountability: 7am UTC (8am WAT)`);
+  console.log(`   🌙 Evening accountability: 8pm UTC (9pm WAT)`);
   console.log(`   ⏰ Deadline nudges: every 6h`);
-  console.log(`   🤫 Silence nudges: 2pm`);
-  console.log(`   📚 Exam season: 7am (May-Jul, Nov-Dec)`);
-  console.log(`   🎯 Opportunities: 11am, 5pm`);
-  console.log(`   📝 Weekly digest: Sunday 8pm`);
+  console.log(`   🤫 Silence nudges: 1pm UTC (2pm WAT)`);
+  console.log(`   📚 Exam season: 6am UTC (7am WAT) — May 27-31, Jun 1-9`);
+  console.log(`   🎯 Opportunities: 10am UTC (11am WAT), 4pm UTC (5pm WAT)`);
+  console.log(`   📝 Weekly digest: Sunday 7pm UTC (8pm WAT)`);
   console.log(`   ⏰ Reminders: every minute`);
 }
 

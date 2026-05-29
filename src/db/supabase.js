@@ -188,6 +188,24 @@ export async function getInactiveUsers(daysSinceActive = 3) {
   return data || [];
 }
 
+/**
+ * Get users who HAVE been active recently (for morning/evening check-ins)
+ */
+export async function getRecentlyActiveUsers(daysActive = 3) {
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - daysActive);
+
+  const { data, error } = await supabase
+    .from('users')
+    .select('*')
+    .eq('is_active', true)
+    .gte('last_active_at', cutoff.toISOString())
+    .order('last_active_at', { ascending: false });
+
+  if (error) throw error;
+  return data || [];
+}
+
 // ═══════════════════════════════════════════
 // GOALS & ACCOUNTABILITY
 // ═══════════════════════════════════════════
