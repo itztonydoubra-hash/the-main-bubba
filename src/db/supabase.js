@@ -171,6 +171,27 @@ export async function markCheckInSent(checkInId) {
 }
 
 /**
+ * Reset check-ins that were marked sent today but likely failed (broken session)
+ * Call this once on startup after a re-pair to re-deliver failed messages
+ */
+export async function resetTodaysFailedCheckIns() {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+
+  const { data, error } = await supabase
+    .from('checkin_schedule')
+    .update({ sent: false, sent_at: null })
+    .eq('sent', true)
+    .gte('sent_at', today.toISOString());
+
+  if (error) {
+    console.error('❌ Error resetting failed check-ins:', error.message);
+    return 0;
+  }
+  return data?.length || 0;
+}
+
+/**
  * Get users who haven't been active recently (for proactive check-ins)
  */
 export async function getInactiveUsers(daysSinceActive = 3) {

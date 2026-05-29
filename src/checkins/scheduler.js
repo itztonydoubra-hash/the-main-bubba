@@ -8,6 +8,7 @@ import {
   getGoalsWithUpcomingDeadlines,
   getUsersWithRecurringGoals,
   getActiveGoals,
+  resetTodaysFailedCheckIns,
 } from '../db/supabase.js';
 import { generateCheckInMessage, generateAccountabilityCheckIn } from '../ai/deepseek.js';
 import { sendMessage } from '../whatsapp/connection.js';
@@ -371,8 +372,12 @@ export function startCheckInScheduler() {
     await processReminders();
   });
 
-  // Process any already-pending check-ins on startup
+  // On startup: reset today's failed check-ins (from broken session) and re-deliver
   setTimeout(async () => {
+    const resetCount = await resetTodaysFailedCheckIns();
+    if (resetCount > 0) {
+      console.log(`🔄 Reset ${resetCount} failed check-in(s) from today — re-delivering...`);
+    }
     await processPendingCheckIns();
   }, 5000);
 
