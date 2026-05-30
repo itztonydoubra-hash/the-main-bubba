@@ -392,12 +392,8 @@ export function startCheckInScheduler() {
     await processReminders();
   });
 
-  // On startup: reset today's failed check-ins (from broken session) and re-deliver
+  // Process any pending (unsent) check-ins on startup
   setTimeout(async () => {
-    const resetCount = await resetTodaysFailedCheckIns();
-    if (resetCount > 0) {
-      console.log(`🔄 Reset ${resetCount} failed check-in(s) from today — re-delivering...`);
-    }
     await processPendingCheckIns();
   }, 5000);
 
