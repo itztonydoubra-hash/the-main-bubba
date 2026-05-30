@@ -18,16 +18,21 @@ import { processReminders } from '../reminders/reminders.js';
 
 /**
  * Convert a phone_number to a valid WhatsApp JID
- * LID numbers (short IDs from WhatsApp) use @lid suffix
- * Regular phone numbers (starting with country code) use @s.whatsapp.net
+ * 
+ * WhatsApp stores users with LID (Linked ID) format internally.
+ * Regular phone numbers start with country code (e.g. 2347051186987)
+ * LIDs are numeric IDs assigned by WhatsApp (e.g. 111978420920438)
+ * 
+ * Detection: if it starts with a known country code pattern for Nigeria (234),
+ * treat as phone number. Otherwise treat as LID.
  */
 function toJid(phoneNumber) {
   if (!phoneNumber) return null;
-  // Regular Nigerian numbers start with 234, international with other country codes
-  // LIDs are shorter numeric IDs that don't start with known country codes
-  if (phoneNumber.startsWith('234') || phoneNumber.startsWith('1') || phoneNumber.length >= 11) {
+  // Only Nigerian numbers starting with 234 are regular phone numbers
+  if (phoneNumber.startsWith('234')) {
     return `${phoneNumber}@s.whatsapp.net`;
   }
+  // Everything else is an LID
   return `${phoneNumber}@lid`;
 }
 
