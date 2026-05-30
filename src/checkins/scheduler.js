@@ -16,6 +16,21 @@ import { runOpportunityCycle } from '../opportunities/monitor.js';
 import { sendWeeklyDigests } from '../checkins/weekly-digest.js';
 import { processReminders } from '../reminders/reminders.js';
 
+/**
+ * Convert a phone_number to a valid WhatsApp JID
+ * LID numbers (short IDs from WhatsApp) use @lid suffix
+ * Regular phone numbers (starting with country code) use @s.whatsapp.net
+ */
+function toJid(phoneNumber) {
+  if (!phoneNumber) return null;
+  // Regular Nigerian numbers start with 234, international with other country codes
+  // LIDs are shorter numeric IDs that don't start with known country codes
+  if (phoneNumber.startsWith('234') || phoneNumber.startsWith('1') || phoneNumber.length >= 11) {
+    return `${phoneNumber}@s.whatsapp.net`;
+  }
+  return `${phoneNumber}@lid`;
+}
+
 // ═══════════════════════════════════════════
 // GENERAL CHECK-INS (existing)
 // ═══════════════════════════════════════════
@@ -28,7 +43,7 @@ async function processPendingCheckIns() {
     const pending = await getPendingCheckIns();
 
     for (const checkIn of pending) {
-      const phoneJid = `${checkIn.phone_number}@s.whatsapp.net`;
+      const phoneJid = toJid(checkIn.phone_number);
       const userName = checkIn.users?.display_name || null;
       const userContext = checkIn.users?.context || {};
 
@@ -211,7 +226,7 @@ async function deadlineCheckIns() {
     const upcomingGoals = await getGoalsWithUpcomingDeadlines(24); // Due within 24h
 
     for (const goal of upcomingGoals) {
-      const phoneJid = `${goal.phone_number}@s.whatsapp.net`;
+      const phoneJid = toJid(goal.phone_number);
       const userName = goal.users?.display_name || null;
       const userContext = goal.users?.context || {};
 
