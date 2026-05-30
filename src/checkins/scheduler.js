@@ -8,7 +8,6 @@ import {
   getGoalsWithUpcomingDeadlines,
   getUsersWithRecurringGoals,
   getActiveGoals,
-  resetTodaysFailedCheckIns,
 } from '../db/supabase.js';
 import { generateCheckInMessage, generateAccountabilityCheckIn } from '../ai/deepseek.js';
 import { sendMessage } from '../whatsapp/connection.js';
@@ -392,10 +391,9 @@ export function startCheckInScheduler() {
     await processReminders();
   });
 
-  // Process any pending (unsent) check-ins on startup
-  setTimeout(async () => {
-    await processPendingCheckIns();
-  }, 5000);
+  // NOTE: We do NOT process pending check-ins on startup.
+  // Render restarts frequently and this was causing spam.
+  // Check-ins only fire at their scheduled cron times.
 
   console.log(`⏰ Check-in scheduler started (all times UTC):`);
   console.log(`   📬 General: ${generalCron}`);
